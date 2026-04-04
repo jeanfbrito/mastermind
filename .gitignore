@@ -1,0 +1,26 @@
+# Build artifacts
+/bin/
+/dist/
+# Built binaries at repo root (NOT the cmd/mastermind source package).
+# Leading slash anchors to repo root; trailing absence means files only.
+/mastermind
+/mastermind-*
+
+# Go
+*.exe
+*.test
+*.out
+*.prof
+coverage.txt
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Local env / notes
+/tmp/
+/.local/
+tasks/todo.md
