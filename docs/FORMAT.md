@@ -30,12 +30,13 @@ confidence: high              # enum: high | medium | low (optional, default: hi
 - **project**: free-form string identifying the project or context. Used for archive scoping. Use `general` for cross-project entries in the user-personal store.
 - **tags**: free-form lowercase strings. No controlled vocabulary — keeps it from rotting. Be generous; tags are how future-you will find things when the topic is forgotten.
 - **topic**: one-line human summary. Shown in search results. Write it so you'd recognize the entry from this line alone.
-- **kind**: exactly five values. More is bloat, fewer loses distinctions.
+- **kind**: exactly six values. More is bloat, fewer loses distinctions.
   - `lesson` — "I learned X the hard way because Y." Highest-value entries.
   - `insight` — "I realized X pattern solves Y class of problem." Cross-cutting.
   - `war-story` — "Spent N hours/days on X, root cause was Y, fix was Z." Specific enough to teach, general enough to transfer.
   - `decision` — "Chose X over Y because of constraint Z." The *why* is what you forget.
   - `pattern` — "When I see shape-X, I try approach Y first." Reusable heuristic.
+  - `open-loop` — "I was about to do X but stopped. Resume when..." Unfinished work the user intended to return to. ADHD-specific kind; defaults to `scope: project-personal`; surfaced automatically at session start (see CONTINUITY.md); auto-expires after 30 days if not resolved via `mm_close_loop`.
 - **confidence**: how sure you are. `high` = battle-tested, `medium` = strong hunch, `low` = half-remembered intuition. Lets future-you weight old entries appropriately.
 
 ## Body structure

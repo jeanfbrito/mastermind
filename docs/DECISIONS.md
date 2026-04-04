@@ -116,6 +116,84 @@ brv's *ideas* (node format, per-project curation, warmup exploration, MCP query 
 
 ---
 
+## 2026-04-04 — Go MCP SDK: official modelcontextprotocol/go-sdk v1.4.1
+
+**Decision**: Depend on `github.com/modelcontextprotocol/go-sdk` at v1.4.1 (stable) or later within the 1.x line. Pin to the latest stable in `go.sum`; upgrade deliberately when new stable tags land.
+
+**Rationale**: Official, Anthropic + Google co-maintained, past v1.0 with stable semver, 88 commits since 2026-01-01, tagged stable v1.4.1 released 2026-03-13. Minimal dependency footprint (`google/jsonschema-go`, `golang-jwt/jwt/v5`, `oauth2`, `segmentio/encoding`, `uritemplate`) — no web framework. Full transport surface including `StdioTransport` (what Claude Code uses). Generic type-safe API (`mcp.AddTool[Input, Output]`) with struct-tag JSON Schema — compile-time guarantees, no `map[string]any` fishing. Known shipping users: `github/github-mcp-server` (28.5k stars, pins the SDK), `containers/kubernetes-mcp-server` (1.4k stars, pinned at stable v1.4.1). For a long-lived personal tool, API stability is worth more than community size.
+
+**Runner-up considered**: `github.com/mark3labs/mcp-go`. Has more stars (8.5k) and more shipping users (grafana-mcp, terraform-mcp, engram, mcp-language-server). Loses because it's pre-1.0 with 47 minor releases in 18 months — the breaking-change tax on a tool we expect to maintain for years is higher than the community-size upside.
+
+**Rejected**: `github.com/metoro-io/mcp-golang`. Unmaintained since September 2025, zero 2026 commits, drags gin + ~30 indirect deps. Disqualifying for a tool targeting minimal dependencies and long life.
+
+**Consequence**: the canonical tool registration pattern mastermind uses is:
+
+```go
+type Input struct { ... }
+type Output struct { ... }
+
+func handler(ctx context.Context, req *mcp.CallToolRequest, in Input) (*mcp.CallToolResult, Output, error) { ... }
+
+server := mcp.NewServer(&mcp.Implementation{Name: "mastermind", Version: version}, nil)
+mcp.AddTool(server, &mcp.Tool{Name: "mm_search", Description: "..."}, handler)
+server.Run(ctx, &mcp.StdioTransport{})
+```
+
+The Go version minimum (`go 1.25`) was a concern briefly but we're already on 1.26.1 so it's moot.
+
+---
+
+## 2026-04-04 — Implementation reference: Gentleman-Programming/engram
+
+**Decision**: `Gentleman-Programming/engram` (https://github.com/Gentleman-Programming/engram) is the primary implementation reference for mastermind's project layout, storage module structure, distribution pipeline, and CLI shape. Cloned locally at `~/Github/engram`. rtk is demoted to secondary reference (style and release workflow only).
+
+**Rationale**: engram is mastermind's structural twin — Go + MCP stdio + single-binary CLI + goreleaser + Homebrew tap + `cmd/<name>` + `internal/mcp/`, `internal/store/`, `internal/server/` layout + pure-Go SQLite. Same domain (memory for AI agents), same transport (MCP stdio), same distribution story (cross-platform binaries via goreleaser + Homebrew). Last commit 2026-03-30; actively maintained. Its `internal/mcp/mcp.go` is a one-file tool-registration module matching mastermind's Phase 1 scope exactly.
+
+**Explicit divergences from engram** (see REFERENCE-NOTES.md appendix for the full matrix):
+
+1. **Storage format**: engram uses SQLite with FTS5 inside the DB. Mastermind uses plain markdown files on disk with FTS5 via context-mode. The longevity argument (the corpus must be `cat`able in 2034 without the tool) is load-bearing and non-negotiable.
+2. **Scope model**: engram is flat. Mastermind has three scopes (user-personal / project-shared / project-personal) plus an archive tier. Career-long compounding requires those distinctions.
+3. **Capture path**: engram writes happen via agent-initiated MCP tool calls. Mastermind's primary capture path is automatic session-close extraction into a mandatory pending/ review queue. This is the ADHD-constraint answer; see CONTINUITY.md.
+4. **Continuity layer**: engram doesn't have one explicitly. Mastermind's session-start injection (open-loops, lessons, pending count surfaced without being asked) is load-bearing for its primary user.
+5. **Target audience**: engram is a general-purpose product shipping to anyone with an agent. Mastermind is built for one user; public release is a bonus if it happens.
+
+**Caveat on MCP wiring**: engram uses `mark3labs/mcp-go`, not the official SDK mastermind adopted. Treat engram as the reference for **project layout, storage module structure, distribution pipeline, and CLI shape** — not for the literal MCP tool-registration call sites. For the registration API use the official SDK's README example and `containers/kubernetes-mcp-server` (which pins the stable v1.4.1). The translation between the two SDKs is mechanical.
+
+**Phase 1 concrete consequence**: read engram's `cmd/engram/main.go`, `internal/mcp/mcp.go`, `internal/store/` (for module structure, not storage format), and `.goreleaser.yaml` before writing any Phase 1 code.
+
+---
+
+## 2026-04-04 — ADHD as the load-bearing design constraint
+
+**Decision**: Mastermind's design is optimized for a user with ADHD. This is not an accessibility consideration or a nice-to-have; it is the primary constraint that shapes every feature decision. Any feature that requires neurotypical working memory to use is, for this user, a broken feature. Any default that assumes "you'll remember to check it" or "you'll trigger it at the right moment" is, for this user, a silent failure.
+
+**Rationale**: The user's own words in the conversation that led to this project: *"just help me with memory stuff and dont needing to tell again and again to the agents and even remember things, my adhd dont helps a lot, so mastermind taking my personal world is all I need."* That sentence is the spec. Every design choice downstream either honors it or betrays it.
+
+**Consequences baked into the design** (see CONTINUITY.md for the full specification):
+
+1. **Capture is automatic, triggered by session-close hooks.** Never willpower-based. The extraction pipeline runs detached on every Claude Code session close, no user action required.
+2. **Retrieval is automatic, triggered by session-start hooks.** Context is injected into every new session before the user types a character — open-loops, relevant lessons, pending count. The tool surfaces what's needed without being asked.
+3. **Open-loops are a first-class entry kind.** The "I was about to do X but got pulled away" pattern is the most ADHD-specific failure mode, and it's the one mastermind must handle automatically and explicitly.
+4. **Pending entries auto-expire after 7 days.** A review queue that accumulates guilt is worse than no tool. Silent deletion, no nag.
+5. **Review is one-at-a-time, keyboard-driven, five seconds per entry.** Lists cause decision paralysis; single items don't.
+6. **No notifications, no reminders, no badges, no streaks, no dashboards.** The default state of the tool is invisible. Presence is not a UX.
+7. **Silent unless needed.** Session-start injection shows only sections with content. Zero pending? Don't mention pending. This is a rule, not a polish item.
+
+**The test for any future feature**: does this work on a day when the user's working memory is at its worst, or does it require a good day to use? If it requires a good day, it's the wrong design. Full stop.
+
+**What this decision explicitly rejects**:
+
+- Any "gentle reminder" UX (reminders compound into guilt).
+- Any progress gamification (streaks punish ADHD cognition).
+- Any dashboard the user has to remember to check.
+- Any capture path that starts with "run this command at session end."
+- Any review flow that shows N entries at once.
+- Any feature whose value depends on user consistency over long timelines.
+
+**Acknowledged trade-off**: these design choices make mastermind less attractive to general users who might prefer a dashboard, notifications, or manual control. That's fine — mastermind is not built for general users. If someone else benefits from the tool as a side effect, great. If nobody else ever uses it, it has still succeeded if it does what it's built to do for its one user.
+
+---
+
 ## TBD — project-personal sync strategy
 
 **Status**: Open.

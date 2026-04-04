@@ -98,18 +98,54 @@ mastermind does not move or restructure this. It reads it and indexes it.
 
 ## MCP tools exposed
 
-Minimal surface:
+Minimal surface. The SDK is `github.com/modelcontextprotocol/go-sdk` v1.4.1 (see DECISIONS.md) with stdio transport. All tools use the generic `mcp.AddTool[Input, Output]` registration pattern with struct-tag JSON Schema.
 
-1. **`mm_search(query, scopes?, include_archive?)`** — primary read. Fans out to all scopes (or the subset specified), queries FTS5, returns source-tagged ranked results. Defaults: all scopes, archive excluded.
-2. **`mm_write(content, scope, kind)`** — programmatic write (for the extraction command). Writes to `<scope>/pending/`, never directly to the active store.
-3. **`mm_promote(pending_path, target_scope)`** — move a pending entry into the active store after review.
+1. **`mm_search(query, scopes?, include_archive?)`** — primary read. Fans out to all three scopes (or the subset specified), queries via context-mode's FTS5 with source labels, returns ranked results with source tags. Defaults: all scopes, archive excluded.
+2. **`mm_write(content, scope, kind)`** — programmatic write (used by extraction and curate paths). Writes to `<scope>/pending/`, never directly to the live store.
+3. **`mm_promote(pending_path, target_scope)`** — move a pending entry into the live store after review.
+4. **`mm_close_loop(loop_id, resolution)`** — mark an open-loop as resolved. Agent calls this when the user indicates a loop is done ("ok I finished that auth refactor"). Moves the entry to `<scope>/resolved-loops/` for history and removes it from session-start injection.
 
-Slash commands layer on top:
-- `/mm-init` — warmup, explore codebase, seed `<repo>/.mm/nodes/`.
-- `/mm-curate <text>` — manual entry creation with scope prompt.
-- `/mm-extract` — session-end extraction.
-- `/mm-archive <project>` — project transition, with cross-project promotion.
-- `/mm-search <query>` — thin wrapper around `mm_search` for direct CLI use.
+Four tools total, forever. Adding a fifth requires a DECISIONS.md entry with a justification.
+
+## CLI subcommands (non-MCP)
+
+Two subcommands are **not** MCP tools — they are CLI commands invoked by Claude Code hooks, outside the MCP protocol. They read/write the same store but run as short-lived subprocesses, not tool calls inside a running session.
+
+1. **`mastermind session-start --cwd <dir>`** — invoked by a Claude Code session-start hook. Walks up from `--cwd` to find the nearest `.mm/` (if any), queries all three scopes, assembles the continuity-injection block (open-loops, relevant lessons, pending count), and writes it to stdout for Claude Code to inject as system context. Must return in <200ms. If slow, returns nothing silently. See CONTINUITY.md.
+2. **`mastermind session-close --transcript <path>`** — invoked by a Claude Code session-close hook. Phase 1 (sync): validates and archives the transcript to `~/.mm/sessions/<timestamp>-<session-id>/`, forks a detached Phase 2 subprocess, returns immediately (<100ms target). Phase 2 (detached): loads the archived transcript, calls the extraction LLM, writes candidates to `<scope>/pending/`, logs telemetry. See EXTRACTION.md.
+
+These two subcommands are the load-bearing mechanism for the continuity layer. They convert mastermind from "a memory tool you use" into "a memory layer that runs silently." See CONTINUITY.md for why this distinction matters for the primary user.
+
+## Slash commands (thin wrappers)
+
+Slash commands live in Claude Code configuration, not in mastermind's binary. Each one is a wrapper that invokes an MCP tool or CLI subcommand with the right arguments.
+
+- `/mm-search <query>` — thin wrapper around `mm_search`.
+- `/mm-review` — starts the pending/ review flow (one entry at a time, keyboard-driven). See CONTINUITY.md for rules.
+- `/mm-curate <text>` — manual one-shot entry creation. Prompts for scope and kind, builds frontmatter, writes via `mm_write`.
+- `/mm-extract` — fallback manual extraction. Same pipeline as session-close, triggered explicitly. See EXTRACTION.md for why this is secondary.
+- `/mm-archive <project>` — project transition. Finds all entries with matching project frontmatter, proposes cross-project promotion, moves non-promoted entries to `~/.mm/archive/<year>/<project>/`.
+- `/mm-init` — warmup for a new project. Explores the codebase and seeds `<repo>/.mm/nodes/` with initial curated knowledge.
+
+## Claude Code hook integration
+
+Mastermind depends on two Claude Code hooks being registered in the user's Claude Code config (`~/.claude/settings.json` or equivalent). The installation instructions live in the README and are a **one-time** setup cost — after that, the hooks run automatically, forever, with no further user action required. This is the load-bearing automation that eliminates the "remember to trigger the tool" failure mode.
+
+**session-start hook** (runs when Claude Code opens a session in a directory):
+```
+mastermind session-start --cwd "$PWD"
+```
+Output (stdout) is injected as system context before the first user turn. Silent if no `.mm/` is found or all context sections are empty.
+
+**session-close hook** (runs when Claude Code closes a session):
+```
+mastermind session-close --transcript "$CLAUDE_TRANSCRIPT_PATH"
+```
+Returns immediately, detaches Phase 2. User sees nothing.
+
+If Claude Code's hook API surface doesn't support these exact lifecycle events, we fall back to the nearest approximations (e.g., a wrapper script that runs mastermind before/after `claude` is invoked). The goal state — automatic fire at session boundaries — is non-negotiable; the implementation mechanism can vary by platform.
+
+**Installation check**: `mastermind doctor` (future addition, not Phase 1) verifies the hooks are registered and working. Runs on demand; never nags.
 
 ## Retrieval flow
 

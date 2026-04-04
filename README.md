@@ -2,6 +2,18 @@
 
 A personal engineering second brain: repo-local shared knowledge + cross-project personal memory + lifelong archive, backed by plain markdown and git.
 
+## Who this is for
+
+The author, who has ADHD and builds software for a living. That's it. The primary design constraint is: **the tool must work on a day when working memory is at its worst, not a day when it's at its best.** Every feature passes through that test.
+
+Specifically, this means the tool captures context automatically at session close (no slash command to remember), surfaces relevant knowledge automatically at session start (no query to remember to run), treats "I was about to do X but got pulled into a meeting" as a first-class memory type (open-loops), and never has a dashboard, a streak counter, or a notification. The default state of the tool is invisible.
+
+If you're neurotypical and want a generic AI-agent memory tool with multi-agent support, a TUI, and an HTTP API, use [engram](https://github.com/Gentleman-Programming/engram) — it's excellent and aimed at exactly that. mastermind is smaller, more opinionated, and built for one person's workflow. If it works for others as a side effect, bonus.
+
+## What success looks like
+
+Not users. Not stars. Not a Discord. The win condition is: **in 2034, you hit a weird bug, you ask your agent, your agent finds a lesson your 2026 self wrote, and ten minutes later you've shipped the fix instead of losing three days.** Everything in the design serves that outcome. See [docs/CONTINUITY.md](docs/CONTINUITY.md) for the full spec of the behaviors that make it possible.
+
 Inspired by [byterover-cli](https://github.com/campfirein/byterover-cli) (substrate, node model, warmup) and [OpenViking](https://github.com/volcengine/OpenViking) (auto-extraction, scope unification as ideas only — no code, no server).
 
 **Reference sources (local clones):**
