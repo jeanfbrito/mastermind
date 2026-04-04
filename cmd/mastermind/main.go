@@ -1,11 +1,19 @@
-// Command mastermind is a personal engineering second brain.
+// Command mastermind is the ADHD cure for agents that you always
+// dreamed for yourself.
 //
-// It exposes an MCP server over stdio with a small set of tools for
-// querying and curating markdown-based knowledge stores across three
-// scopes: user-personal, project-shared, and project-personal.
+// It runs as an MCP server over stdio plus two CLI subcommands
+// (session-start, session-close) wired to Claude Code hooks. Together
+// they form a continuity layer: context is surfaced automatically at
+// session start, lessons are extracted automatically at session close,
+// and the user's working memory is never taxed by the tool itself.
 //
-// See the project docs for the design: docs/ARCHITECTURE.md,
-// docs/FORMAT.md, docs/EXTRACTION.md, docs/ARCHIVE.md.
+// See the project docs for the design:
+//   - docs/CONTINUITY.md   — the load-bearing behaviors
+//   - docs/ARCHITECTURE.md — module layout and MCP tool surface
+//   - docs/FORMAT.md       — the entry schema (the long-term contract)
+//   - docs/EXTRACTION.md   — the capture pipeline
+//   - docs/ARCHIVE.md      — working set vs lifelong archive
+//   - docs/DECISIONS.md    — the why behind every architectural choice
 package main
 
 import (

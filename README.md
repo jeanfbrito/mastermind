@@ -1,5 +1,7 @@
 # mastermind
 
+> *The ADHD cure for agents that you always dreamed for yourself.*
+
 A personal engineering second brain: repo-local shared knowledge + cross-project personal memory + lifelong archive, backed by plain markdown and git.
 
 ## Who this is for
