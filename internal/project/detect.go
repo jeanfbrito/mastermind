@@ -55,6 +55,36 @@ func Detect(dir string) string {
 	return normalize(base)
 }
 
+// DetectFromGit resolves a project name using git signals only: git
+// remote origin first, git working-tree root basename second. Returns
+// an empty string (not Unknown) if dir is not inside a git repository.
+//
+// Unlike Detect, this does NOT fall back to the cwd basename. Callers
+// that need to gate behavior on "is this dir part of a real project"
+// — such as mastermind's project-personal scope wire-up, which must
+// not create garbage directories under ~/.claude/projects for every
+// tmpdir the binary is spawned in — should use DetectFromGit. Callers
+// that always want SOME name (for display, for project-scoped search
+// output) should use Detect.
+//
+// The returned name is normalized the same way Detect normalizes:
+// lowercase, trimmed.
+func DetectFromGit(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	if strings.HasPrefix(dir, "-") {
+		dir = "./" + dir
+	}
+	if name := detectFromGitRemote(dir); name != "" {
+		return normalize(name)
+	}
+	if name := detectFromGitRoot(dir); name != "" {
+		return normalize(name)
+	}
+	return ""
+}
+
 // normalize applies canonical project name rules: lowercase + trim.
 // Empty results collapse to Unknown so callers never have to null-check.
 func normalize(name string) string {

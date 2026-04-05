@@ -27,6 +27,7 @@ import (
 	"syscall"
 
 	"github.com/jeanfbrito/mastermind/internal/mcp"
+	"github.com/jeanfbrito/mastermind/internal/project"
 	"github.com/jeanfbrito/mastermind/internal/search"
 	"github.com/jeanfbrito/mastermind/internal/store"
 )
@@ -80,25 +81,65 @@ func main() {
 	}
 }
 
+// buildSessionConfig constructs a store.Config with all three scope
+// roots populated for the current session:
+//
+//   - UserPersonalRoot: ~/.mm (from store.DefaultConfig, which resolves
+//     $HOME).
+//   - ProjectSharedRoot: <root>/.mm when walking upward from cwd finds
+//     a .mm/ directory. Left empty otherwise — the scope disables
+//     silently rather than creating a new .mm/ the user never asked for.
+//   - ProjectPersonalRoot: ~/.claude/projects/<slug>/memory when cwd is
+//     inside a git repository. The slug comes from project.DetectFromGit,
+//     which reads the origin remote first and falls back to the git
+//     working-tree basename. If cwd is NOT inside a git repo (or
+//     git is unavailable), the scope is left empty — this is a
+//     deliberate guard against spawning garbage directories under
+//     ~/.claude/projects/<random-tmpdir-name>/ every time the binary
+//     is run from a non-project cwd.
+//
+// The chosen naming convention for project-personal — slug, not
+// dash-encoded cwd — means two clones of the same project on two
+// machines (e.g., ~/Github/mastermind and ~/code/mastermind) map to
+// the same directory and the entries merge cleanly on sync. This is
+// load-bearing for the cross-machine memory story. See the promoted
+// pattern entry .mm/nodes/store-defaultconfig-returns-a-skeleton-...md
+// and the closed open-loop that originally flagged this design call.
+//
+// Escape hatch for the edge case where a slug collision is unwanted
+// (two unrelated projects that normalize to the same name): a future
+// MASTERMIND_PROJECT_DIR env var can override this path. Not
+// implemented yet — add it when a real collision surfaces, not before.
+func buildSessionConfig(cwd string) (store.Config, error) {
+	cfg, err := store.DefaultConfig()
+	if err != nil {
+		return store.Config{}, err
+	}
+
+	if root := store.FindProjectRoot(cwd); root != "" {
+		cfg.ProjectSharedRoot = filepath.Join(root, ".mm")
+	}
+
+	if slug := project.DetectFromGit(cwd); slug != "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			cfg.ProjectPersonalRoot = filepath.Join(home, ".claude", "projects", slug, "memory")
+		}
+	}
+
+	return cfg, nil
+}
+
 // runMCPServer boots the three-scope store, wires up the searcher and
 // the MCP server, and runs until the client disconnects or a signal
 // arrives. Returns any error that escapes the SDK run loop.
 func runMCPServer() error {
-	cfg, err := store.DefaultConfig()
+	cwd, err := os.Getwd()
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+		return fmt.Errorf("get cwd: %w", err)
 	}
-
-	// Project-shared scope detection: walk upward from cwd looking for
-	// a .mm/ directory. If found, point the store at it so mm_write
-	// with scope=project-shared has somewhere to land. An absent .mm/
-	// leaves ProjectSharedRoot empty, which disables the scope silently
-	// — other scopes continue to work. This is per-session: every
-	// spawn of the server re-detects, so moving between projects works.
-	if cwd, err := os.Getwd(); err == nil {
-		if root := store.FindProjectRoot(cwd); root != "" {
-			cfg.ProjectSharedRoot = filepath.Join(root, ".mm")
-		}
+	cfg, err := buildSessionConfig(cwd)
+	if err != nil {
+		return fmt.Errorf("build session config: %w", err)
 	}
 
 	s := store.New(cfg)

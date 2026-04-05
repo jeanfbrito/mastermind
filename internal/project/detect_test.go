@@ -168,6 +168,68 @@ func TestDetectFromCwdBasenameNoGit(t *testing.T) {
 	}
 }
 
+// TestDetectFromGitReturnsEmptyWithoutGit is the critical invariant
+// that DetectFromGit does NOT fall back to the cwd basename. A
+// non-git directory must return empty string so callers like the
+// project-personal scope wire-up can gate on "real project" without
+// creating garbage directories.
+func TestDetectFromGitReturnsEmptyWithoutGit(t *testing.T) {
+	tmp := t.TempDir()
+	plainDir := filepath.Join(tmp, "not-a-repo")
+	if err := os.MkdirAll(plainDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got := DetectFromGit(plainDir)
+	if got != "" {
+		t.Errorf("DetectFromGit non-git dir = %q, want empty string", got)
+	}
+}
+
+// TestDetectFromGitUsesRemoteWhenPresent mirrors TestDetectFromGitRemote
+// but through the git-gated entry point. A repo with a remote should
+// produce the repo name from the remote URL.
+func TestDetectFromGitUsesRemoteWhenPresent(t *testing.T) {
+	needGit(t)
+
+	tmp := t.TempDir()
+	repoDir := filepath.Join(tmp, "local-name-ignored")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initGitRepo(t, repoDir)
+
+	cmd := exec.Command("git", "-C", repoDir, "remote", "add", "origin",
+		"git@github.com:jeanfbrito/mastermind.git")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git remote add: %v\n%s", err, out)
+	}
+
+	got := DetectFromGit(repoDir)
+	if got != "mastermind" {
+		t.Errorf("DetectFromGit with remote = %q, want mastermind", got)
+	}
+}
+
+// TestDetectFromGitUsesRootBasenameWithoutRemote covers the second
+// detection tier: a git repo with no origin remote should still
+// produce a name via `git rev-parse --show-toplevel`.
+func TestDetectFromGitUsesRootBasenameWithoutRemote(t *testing.T) {
+	needGit(t)
+
+	tmp := t.TempDir()
+	repoDir := filepath.Join(tmp, "sologitrepo")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	initGitRepo(t, repoDir)
+
+	got := DetectFromGit(repoDir)
+	if got != "sologitrepo" {
+		t.Errorf("DetectFromGit git root no remote = %q, want sologitrepo", got)
+	}
+}
+
 func TestDetectNormalizesResult(t *testing.T) {
 	// Verify the output is always lowercase/trimmed, regardless of
 	// which detection tier wins.
