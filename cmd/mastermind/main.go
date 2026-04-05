@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"syscall"
@@ -86,6 +87,18 @@ func runMCPServer() error {
 	cfg, err := store.DefaultConfig()
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
+	}
+
+	// Project-shared scope detection: walk upward from cwd looking for
+	// a .mm/ directory. If found, point the store at it so mm_write
+	// with scope=project-shared has somewhere to land. An absent .mm/
+	// leaves ProjectSharedRoot empty, which disables the scope silently
+	// — other scopes continue to work. This is per-session: every
+	// spawn of the server re-detects, so moving between projects works.
+	if cwd, err := os.Getwd(); err == nil {
+		if root := store.FindProjectRoot(cwd); root != "" {
+			cfg.ProjectSharedRoot = filepath.Join(root, ".mm")
+		}
 	}
 
 	s := store.New(cfg)
