@@ -152,6 +152,46 @@ func TestWriteUnconfiguredScopeFails(t *testing.T) {
 	}
 }
 
+// TestWriteUnconfiguredScopeErrorIsDistinct locks the invariant that
+// an unknown scope string and a known scope with no configured root
+// surface as distinct error messages. Both wrap ErrInvalidScope so
+// callers that only care about the sentinel keep working, but the
+// messages carry enough detail for a human (or an agent reading its
+// own tool error) to diagnose the failure.
+//
+// The distinction matters because "I typed user-persoanl and mastermind
+// rejected it" and "I typed project-personal and mastermind is not
+// wired for that scope this session" are very different problems with
+// very different fixes. Collapsing them back into one message is a
+// real regression — this test fails if that happens.
+func TestWriteUnconfiguredScopeErrorIsDistinct(t *testing.T) {
+	cfg := Config{
+		UserPersonalRoot: t.TempDir(),
+		Now:              time.Now,
+	}
+	s := New(cfg)
+
+	_, errUnknown := s.Write(makeEntry("nonsense-scope", "bogus"))
+	if !errors.Is(errUnknown, ErrInvalidScope) {
+		t.Fatalf("unknown scope: err = %v, want ErrInvalidScope", errUnknown)
+	}
+	if !strings.Contains(errUnknown.Error(), "unknown scope") {
+		t.Errorf("unknown-scope error does not mention \"unknown scope\": %v", errUnknown)
+	}
+
+	_, errNotConfigured := s.Write(makeEntry(format.ScopeProjectShared, "bogus"))
+	if !errors.Is(errNotConfigured, ErrInvalidScope) {
+		t.Fatalf("unconfigured scope: err = %v, want ErrInvalidScope", errNotConfigured)
+	}
+	if !strings.Contains(errNotConfigured.Error(), "no root configured") {
+		t.Errorf("unconfigured-scope error does not mention \"no root configured\": %v", errNotConfigured)
+	}
+
+	if errUnknown.Error() == errNotConfigured.Error() {
+		t.Errorf("unknown-scope and unconfigured-scope errors are identical, expected distinct messages: %v", errUnknown)
+	}
+}
+
 func TestWriteNilEntryFails(t *testing.T) {
 	s, _ := newTestStore(t)
 	_, err := s.Write(nil)

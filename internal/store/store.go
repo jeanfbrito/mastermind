@@ -130,9 +130,12 @@ func (s *Store) Write(entry *format.Entry) (string, error) {
 	entry.Normalize()
 
 	scope := scopeFromFormat(entry.Metadata.Scope)
+	if scope == scopeUnknown {
+		return "", fmt.Errorf("%w: unknown scope %q (expected user-personal, project-shared, or project-personal)", ErrInvalidScope, entry.Metadata.Scope)
+	}
 	root := s.cfg.rootFor(scope)
-	if scope == scopeUnknown || root == "" {
-		return "", fmt.Errorf("%w: %q", ErrInvalidScope, entry.Metadata.Scope)
+	if root == "" {
+		return "", fmt.Errorf("%w: scope %q is valid but has no root configured in this session (caller forgot to wire it, see cmd/mastermind/main.go:runMCPServer)", ErrInvalidScope, entry.Metadata.Scope)
 	}
 
 	pendingPath := filepath.Join(root, pendingDirName)
