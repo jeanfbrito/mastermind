@@ -194,6 +194,32 @@ The Go version minimum (`go 1.25`) was a concern briefly but we're already on 1.
 
 ---
 
+## 2026-04-04 — Go minimum bumped 1.22 → 1.25 (forced by MCP SDK)
+
+**Decision**: `go.mod` declares `go 1.25`. The earlier plan targeted Go 1.22 to stay close to the oldest supported toolchain, but `github.com/modelcontextprotocol/go-sdk` v1.4.1 requires Go 1.25 and the dependency is non-negotiable.
+
+**Rationale**: The SDK uses language features (generics ergonomics, `slices`/`maps` stdlib additions, `for range int`) introduced between 1.22 and 1.23-1.25. Pinning below the SDK's floor is not an option. Local toolchain is already Go 1.26.1, so this bump has zero practical cost; it only affects users building from source on an old Go, who can `go install` a newer toolchain in under a minute.
+
+**Consequence**: the Go 1 compatibility promise still applies — code written against 1.25 will compile on every future 1.x. The longevity argument from the language decision is unchanged. Upgrading the SDK floor in the future will likely drag the Go minimum with it; that is acceptable and expected.
+
+**Alternatives considered**:
+- *Vendor the SDK and backport*: rejected — maintenance burden, defeats the point of using an upstream SDK.
+- *Switch to mark3labs/mcp-go (lower Go floor)*: rejected — already rejected in the SDK decision on stability grounds; the Go floor is not a good enough reason to reopen that.
+
+---
+
+## 2026-04-04 — Phase 1 test baseline: 91 tests across 6 packages
+
+**Decision**: The Phase 1 completion baseline is **91 tests passing across 6 Go packages** (`internal/format`, `internal/store`, `internal/project`, `internal/search`, `internal/mcp`, and the `cmd/mastermind` package which currently contributes 0). This is recorded here so any future commit that lands with fewer tests is a red flag unless the drop is explicit and justified.
+
+**Rationale**: Phase 1 was the locked-format moment — frontmatter parser, three-scope store, topic-dominant search ranking, and MCP tool wiring. Those behaviors are load-bearing and the tests exist specifically to catch silent drift (ranking invariants, pending-only write enforcement, serverInstructions content). Losing tests without an explanation means something got weakened without anyone noticing.
+
+**How to verify**: `make test` — the summary line should show all packages green and total count ≥ 91. `go test ./... -count=1 -v | grep -c '^=== RUN'` gives the exact current count.
+
+**Consequence**: Phase 2 and beyond MUST only grow this number. If a refactor genuinely deletes a test (because the thing being tested stopped existing), note it in the commit message and update this entry.
+
+---
+
 ## TBD — project-personal sync strategy
 
 **Status**: Open.
