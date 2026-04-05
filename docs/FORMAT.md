@@ -19,7 +19,8 @@ date: 2026-04-04              # ISO date, when captured
 project: Rocket.Chat.Electron # free-form string, the project this came from
 tags: [electron, ipc, macos]  # free-form, lowercase, plural OK
 topic: "One-line summary"     # human headline, used in search previews
-kind: lesson                  # enum: lesson | insight | war-story | decision | pattern
+kind: lesson                  # enum: lesson | insight | war-story | decision | pattern | open-loop
+scope: user-personal          # enum: user-personal | project-shared | project-personal
 confidence: high              # enum: high | medium | low (optional, default: high)
 ---
 ```
@@ -37,6 +38,12 @@ confidence: high              # enum: high | medium | low (optional, default: hi
   - `decision` — "Chose X over Y because of constraint Z." The *why* is what you forget.
   - `pattern` — "When I see shape-X, I try approach Y first." Reusable heuristic.
   - `open-loop` — "I was about to do X but stopped. Resume when..." Unfinished work the user intended to return to. ADHD-specific kind; defaults to `scope: project-personal`; surfaced automatically at session start (see CONTINUITY.md); auto-expires after 30 days if not resolved via `mm_close_loop`.
+- **scope**: which of the three stores the entry belongs to. Exactly three values:
+  - `user-personal` — lives at `~/.mm/lessons/<slug>.md`. Career-long, cross-project knowledge that follows you between machines.
+  - `project-shared` — lives at `<repo>/.mm/nodes/<slug>.md`. Checked into the repo; shared with anyone who clones it.
+  - `project-personal` — lives at `~/.claude/projects/<project>/memory/nodes/<slug>.md`. Machine-local notes about a specific project you don't want to share with collaborators; the default for `open-loop` entries.
+
+  Optional in frontmatter for hand-placed files (the store can infer it from the directory the file lives in) but **required** when capturing via `mm_write`, because the tool has to decide which store root to target before the file exists on disk.
 - **confidence**: how sure you are. `high` = battle-tested, `medium` = strong hunch, `low` = half-remembered intuition. Lets future-you weight old entries appropriately.
 
 ## Body structure
@@ -73,6 +80,7 @@ project: Rocket.Chat.Electron
 tags: [electron, ipc, macos, debugging, main-process]
 topic: "macOS Electron IPC hangs when main process blocks on sync I/O"
 kind: lesson
+scope: user-personal
 confidence: high
 ---
 
