@@ -286,16 +286,32 @@ func (s *Store) Reject(pendingPath string) error {
 	return nil
 }
 
-// PruneStale deletes every pending entry across all configured scopes
-// whose modification time is older than PendingTTL. Returns the number
-// of files removed.
+// AutoPromoteStale promotes old pending entries to the live store when
+// the store's PendingBehavior is PendingAutoPromote. When
+// PendingBehavior is PendingKeepForever (the default), this is a no-op.
 //
-// This is the "no guilt queue" enforcement: pending entries that sit
-// unreviewed for a week are silently dropped. The caller (typically
-// main on startup) never reports the count to the user.
-func (s *Store) PruneStale() (int, error) {
-	cutoff := s.cfg.Now().Add(-PendingTTL)
-	var removed int
+// Returns the number of entries promoted. Entries that would collide
+// with an existing live entry (ErrEntryExists) are silently skipped —
+// they stay in pending for manual review rather than being lost.
+//
+// This replaced the original PruneStale, which DELETED old entries.
+// That behavior was reversed because auto-delete is the only
+// irreversible failure mode in the system. See DECISIONS.md.
+func (s *Store) AutoPromoteStale() (int, error) {
+	behavior := s.cfg.PendingBehavior
+	if behavior == "" {
+		behavior = PendingKeepForever
+	}
+	if behavior == PendingKeepForever {
+		return 0, nil
+	}
+
+	promoteAfter := s.cfg.AutoPromoteAfter
+	if promoteAfter == 0 {
+		promoteAfter = DefaultAutoPromoteAfter
+	}
+	cutoff := s.cfg.Now().Add(-promoteAfter)
+	var promoted int
 
 	for _, scope := range []format.Scope{
 		format.ScopeUserPersonal,
@@ -304,7 +320,7 @@ func (s *Store) PruneStale() (int, error) {
 	} {
 		refs, err := s.ListPending(scope)
 		if err != nil {
-			return removed, err
+			return promoted, err
 		}
 		for _, ref := range refs {
 			info, err := os.Stat(ref.Path)
@@ -312,17 +328,76 @@ func (s *Store) PruneStale() (int, error) {
 				if errors.Is(err, fs.ErrNotExist) {
 					continue
 				}
-				return removed, fmt.Errorf("store: stat %s: %w", ref.Path, err)
+				return promoted, fmt.Errorf("store: stat %s: %w", ref.Path, err)
 			}
 			if info.ModTime().Before(cutoff) {
-				if err := os.Remove(ref.Path); err != nil {
-					return removed, fmt.Errorf("store: remove stale %s: %w", ref.Path, err)
+				_, err := s.Promote(ref.Path)
+				if err != nil {
+					if errors.Is(err, ErrEntryExists) {
+						// Skip silently — the entry stays in pending
+						// for manual review rather than being lost.
+						continue
+					}
+					return promoted, fmt.Errorf("store: auto-promote %s: %w", ref.Path, err)
 				}
-				removed++
+				promoted++
 			}
 		}
 	}
-	return removed, nil
+	return promoted, nil
+}
+
+// WriteLive writes an entry directly to the live store, bypassing
+// pending entirely. This is the path for user-initiated captures
+// (mm_write during a conversation) where the user IS the review —
+// they're present, they can see what the agent is writing, they chose
+// to create it. Forcing a second approve step via mm_promote would be
+// pointless ceremony.
+//
+// Automatic extraction (Phase 3 session-close) should use Write
+// (which targets pending/) because the user isn't present to review.
+//
+// WriteLive uses the same atomic write pattern as Write (tempfile +
+// rename). Returns ErrEntryExists if a live entry with the same slug
+// already exists.
+func (s *Store) WriteLive(entry *format.Entry) (string, error) {
+	if entry == nil {
+		return "", fmt.Errorf("store: write-live: nil entry")
+	}
+	entry.Normalize()
+
+	scope := scopeFromFormat(entry.Metadata.Scope)
+	if scope == scopeUnknown {
+		return "", fmt.Errorf("%w: unknown scope %q (expected user-personal, project-shared, or project-personal)", ErrInvalidScope, entry.Metadata.Scope)
+	}
+	root := s.cfg.rootFor(scope)
+	if root == "" {
+		return "", fmt.Errorf("%w: scope %q is valid but has no root configured in this session (caller forgot to wire it, see cmd/mastermind/main.go:runMCPServer)", ErrInvalidScope, entry.Metadata.Scope)
+	}
+
+	liveDirPath := filepath.Join(root, liveDir(scope))
+	if err := os.MkdirAll(liveDirPath, 0o755); err != nil {
+		return "", fmt.Errorf("store: mkdir live: %w", err)
+	}
+
+	name := liveFileName(entry.Metadata.Topic)
+	target := filepath.Join(liveDirPath, name)
+
+	if _, err := os.Stat(target); err == nil {
+		return "", fmt.Errorf("%w: %s", ErrEntryExists, target)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return "", fmt.Errorf("store: stat target: %w", err)
+	}
+
+	data, err := entry.MarshalMarkdown()
+	if err != nil {
+		return "", fmt.Errorf("store: marshal entry: %w", err)
+	}
+
+	if err := writeFileAtomic(target, data); err != nil {
+		return "", fmt.Errorf("store: atomic write %s: %w", target, err)
+	}
+	return target, nil
 }
 
 // ─── internal helpers ───────────────────────────────────────────────────

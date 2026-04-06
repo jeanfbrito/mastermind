@@ -41,13 +41,13 @@ a3bd453 Initial commit: design docs and Go scaffold
 
 These are load-bearing. Violating any of them breaks the tool for its primary user.
 
-1. **No auto-writes to the live store.** Every entry passes through `<scope>/pending/` and a human review step. `mm_write` only writes to pending. `mm_promote` is user-gated. No exceptions.
+1. **User-initiated writes go directly to the live store.** When the user tells the agent to capture something (`mm_write`), the entry goes straight to the live store — the user IS the review. `pending/` is reserved for auto-extracted entries from session-close (Phase 3), which the user wasn't present to review. `mm_promote` moves those pending candidates to live after review.
 2. **No notifications, no reminders, no badges, no streaks, no dashboards.** The default state of the tool is invisible.
 3. **No persistent index.** Files on disk are the database. Ephemeral in-memory caches only (see search + store packages).
 4. **No delegation to context-mode from inside mastermind code.** context-mode and mastermind are two independent tools the agent can reach for separately. The synergy happens automatically because context-mode indexes mastermind's MCP output as session content. No MCP client inside mastermind.
 5. **No replacement for engram.** Mastermind deliberately diverges on storage format, scope model, capture path, continuity layer, and target audience. If a design impulse would make mastermind look more like engram, that's a signal to stop and re-read REFERENCE-NOTES.md appendix.
 6. **Four MCP tools, forever.** `mm_search`, `mm_write`, `mm_promote`, `mm_close_loop`. Adding a fifth requires a DECISIONS.md entry with explicit justification.
-7. **Pending entries auto-expire after 7 days, silently.** No nag, no log to stdout. The queue is either fresh or empty — never old and shameful.
+7. **Pending entries are kept indefinitely. Knowledge is never silently deleted.** Optionally, a configurable auto-promote policy moves old candidates to the live store after N days (default: off). The queue is patient — old entries are waiting for a good day, not accumulating shame.
 8. **Session-close extraction is automatic (hook-driven). Session-start injection is automatic (hook-driven).** The user never has to remember to trigger capture or retrieval. Phase 3 implements the hooks.
 
 ## Reference repos (local clones)

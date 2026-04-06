@@ -220,6 +220,44 @@ The Go version minimum (`go 1.25`) was a concern briefly but we're already on 1.
 
 ---
 
+## 2026-04-06 — Reverse auto-expire: pending entries never lose knowledge
+
+**Decision**: Pending entries are kept indefinitely by default. The original hard rule #7 ("auto-expire after 7 days, silently") is reversed. An optional `PendingAutoPromote` policy moves old candidates to the live store after a configurable duration (default 7 days) — but the default behavior (`PendingKeepForever`) never touches pending entries. Knowledge is never silently deleted.
+
+**Rationale**: Auto-delete is the only irreversible failure mode in the system. It punishes exactly the ADHD pattern mastermind is designed for: a user who doesn't review for 10 days loses knowledge silently, and never even knows what was lost. The original rationale ("a guilt queue is worse than no tool") correctly identified the problem but chose the wrong fix. Deleting knowledge to prevent guilt is like burning a notebook to prevent clutter. The right fix is to make review trivially easy — the agent can assist with review and promotion, so the cost of reviewing is near-zero — and to accept that an old queue is not shameful, it's patient.
+
+**What changed in code**:
+- `store.PendingTTL` constant removed, replaced by `PendingPolicy` type (`PendingKeepForever` | `PendingAutoPromote`) and `Config.PendingBehavior` / `Config.AutoPromoteAfter` fields.
+- `store.PruneStale()` removed, replaced by `store.AutoPromoteStale()` which promotes (not deletes) old entries when the auto-promote policy is active, and is a no-op under the default keep-forever policy.
+- Entries that would collide with an existing live entry on auto-promote are silently skipped (stay in pending for manual review), never lost.
+
+**Alternatives considered**:
+- *Auto-delete with longer TTL (30 days)*: rejected — still irreversible, still silent, still punishes the wrong pattern. Duration is not the variable.
+- *Auto-accept as the default*: rejected for now — keep-forever is safer as default. Auto-accept is available as an opt-in policy for users who want zero-maintenance.
+- *Nag the user to review*: rejected — nagging is a guilt machine. ADHD constraint #6.
+
+---
+
+## 2026-04-06 — User-initiated writes bypass pending: the user IS the review
+
+**Decision**: `mm_write` (the MCP tool called by the agent during a session) writes directly to the live store via `store.WriteLive()`, bypassing `pending/` entirely. The pending queue is reserved for auto-captured knowledge (session-close extraction, Phase 3) where the user wasn't consciously involved.
+
+**Rationale**: When the user tells the agent to capture something, three things are already true: (1) the user is present, (2) the user can see what the agent is writing, (3) the user chose to create it. Forcing a second approve step via `mm_promote` is pointless ceremony — the user already reviewed the entry by being in the conversation that produced it. The pending gate exists to protect against unreviewed auto-writes (session-close extraction), not against writes the user explicitly requested.
+
+**What changed in code**:
+- `internal/mcp/tools.go`: `handleWrite` calls `store.WriteLive()` instead of `store.Write()`.
+- `store.WriteLive()`: new method that writes directly to the live directory (same atomicity guarantees as `Write`). Returns `ErrEntryExists` on slug collision.
+- `store.Write()` still exists and still writes to `pending/`. It will be used by the Phase 3 session-close extraction pipeline.
+- `serverInstructions` updated: agents are told `mm_write` goes to live, and `mm_promote` is for reviewing auto-extracted pending candidates.
+
+**What this reverses**: Hard rule #1, which previously said "No auto-writes to the live store. Every entry passes through pending/ and a human review step." The new rule: user-initiated writes go directly to live; only automatic extraction passes through pending.
+
+**Alternatives considered**:
+- *Keep mm_write → pending, but auto-promote immediately*: rejected — a Write+Promote round-trip that always succeeds is indistinguishable from a direct write, but with more moving parts. Just write to live.
+- *Add a `direct: bool` parameter to mm_write*: rejected — the agent can't reliably distinguish "user asked me to save this" from "I'm saving this proactively." Since mm_write is always called in a session where the user is present, the simpler rule is: mm_write always goes to live.
+
+---
+
 ## TBD — project-personal sync strategy
 
 **Status**: Open.

@@ -144,10 +144,11 @@ func runMCPServer() error {
 
 	s := store.New(cfg)
 
-	// Silent pending auto-expire: the first thing any session does is
-	// drop stale candidates older than PendingTTL. No log, no count, no
-	// user-visible output — see CONTINUITY.md on "silent unless needed".
-	_, _ = s.PruneStale()
+	// Optional auto-promote: when PendingBehavior is "auto-promote",
+	// old pending entries are silently promoted to the live store at
+	// startup. Default (keep-forever) is a no-op. See DECISIONS.md
+	// "Reverse auto-expire" for why entries are never deleted.
+	_, _ = s.AutoPromoteStale()
 
 	searcher := search.NewKeywordSearcher(s)
 

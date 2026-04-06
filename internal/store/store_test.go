@@ -437,57 +437,178 @@ func TestRejectIsIdempotent(t *testing.T) {
 	}
 }
 
-// ─── prune stale ───────────────────────────────────────────────────────
+// ─── auto-promote stale ────────────────────────────────────────────────
 
-func TestPruneStaleRemovesOldPending(t *testing.T) {
+func TestAutoPromoteStalePromotesOldPending(t *testing.T) {
 	s, cfg := newTestStore(t)
+	s.cfg.PendingBehavior = PendingAutoPromote
 	// Inject a fake Now so the default file mtime ("now") is 8 days old.
 	fakeNow := time.Now().Add(8 * 24 * time.Hour)
 	s.cfg.Now = fixedNow(fakeNow)
 
-	path, err := s.Write(makeEntry(format.ScopeUserPersonal, "stale"))
+	pendingPath, err := s.Write(makeEntry(format.ScopeUserPersonal, "old enough to promote"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The file exists. Confirm.
-	if _, err := os.Stat(path); err != nil {
+	if _, err := os.Stat(pendingPath); err != nil {
 		t.Fatal(err)
 	}
 
-	// Now prune. "Now" is 8 days after the file was written (file mtime
-	// is real time.Now, store's Now is +8 days).
-	removed, err := s.PruneStale()
+	promoted, err := s.AutoPromoteStale()
 	if err != nil {
-		t.Fatalf("PruneStale: %v", err)
+		t.Fatalf("AutoPromoteStale: %v", err)
 	}
-	if removed != 1 {
-		t.Errorf("PruneStale removed %d, want 1", removed)
+	if promoted != 1 {
+		t.Errorf("AutoPromoteStale promoted %d, want 1", promoted)
 	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Errorf("stale file not removed: %v", err)
+	// Pending file should be gone (moved, not deleted).
+	if _, err := os.Stat(pendingPath); !os.IsNotExist(err) {
+		t.Errorf("pending file still exists after auto-promote: %v", err)
 	}
-
-	// Cover the unused cfg arg explicitly.
-	_ = cfg
+	// Live file should exist.
+	livePath := filepath.Join(cfg.UserPersonalRoot, "lessons", "old-enough-to-promote.md")
+	if _, err := os.Stat(livePath); err != nil {
+		t.Errorf("live file does not exist after auto-promote: %v", err)
+	}
 }
 
-func TestPruneStaleKeepsFreshPending(t *testing.T) {
+func TestAutoPromoteStaleKeepsFreshPending(t *testing.T) {
 	s, _ := newTestStore(t)
+	s.cfg.PendingBehavior = PendingAutoPromote
 	// Default Now (real time.Now). Just written files are 0 days old.
 	path, err := s.Write(makeEntry(format.ScopeUserPersonal, "fresh"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	removed, err := s.PruneStale()
+	promoted, err := s.AutoPromoteStale()
 	if err != nil {
-		t.Fatalf("PruneStale: %v", err)
+		t.Fatalf("AutoPromoteStale: %v", err)
 	}
-	if removed != 0 {
-		t.Errorf("PruneStale removed %d, want 0 (file is fresh)", removed)
+	if promoted != 0 {
+		t.Errorf("AutoPromoteStale promoted %d, want 0 (file is fresh)", promoted)
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf("fresh file removed incorrectly: %v", err)
+	}
+}
+
+func TestAutoPromoteStaleNoOpWhenPolicyKeepForever(t *testing.T) {
+	s, _ := newTestStore(t)
+	// Default PendingBehavior is "" which is treated as keep-forever.
+	fakeNow := time.Now().Add(30 * 24 * time.Hour) // 30 days later
+	s.cfg.Now = fixedNow(fakeNow)
+
+	path, err := s.Write(makeEntry(format.ScopeUserPersonal, "ancient but kept"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	promoted, err := s.AutoPromoteStale()
+	if err != nil {
+		t.Fatalf("AutoPromoteStale: %v", err)
+	}
+	if promoted != 0 {
+		t.Errorf("AutoPromoteStale promoted %d with keep-forever policy, want 0", promoted)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("pending file deleted under keep-forever policy: %v", err)
+	}
+}
+
+func TestAutoPromoteStaleSkipsOnConflict(t *testing.T) {
+	s, cfg := newTestStore(t)
+	s.cfg.PendingBehavior = PendingAutoPromote
+	fakeNow := time.Now().Add(8 * 24 * time.Hour)
+	s.cfg.Now = fixedNow(fakeNow)
+
+	// Write a pending entry.
+	pendingPath, err := s.Write(makeEntry(format.ScopeUserPersonal, "conflict topic"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Manually place a live entry with the same slug so promotion would
+	// collide.
+	liveDir := filepath.Join(cfg.UserPersonalRoot, "lessons")
+	if err := os.MkdirAll(liveDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	livePath := filepath.Join(liveDir, "conflict-topic.md")
+	if err := os.WriteFile(livePath, []byte("existing"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	promoted, err := s.AutoPromoteStale()
+	if err != nil {
+		t.Fatalf("AutoPromoteStale: %v", err)
+	}
+	if promoted != 0 {
+		t.Errorf("AutoPromoteStale promoted %d, want 0 (conflict)", promoted)
+	}
+	// Pending file must still exist — not lost.
+	if _, err := os.Stat(pendingPath); err != nil {
+		t.Errorf("pending file lost on conflict: %v", err)
+	}
+}
+
+// ─── write live ────────────────────────────────────────────────────────
+
+func TestWriteLiveLandsInLiveDir(t *testing.T) {
+	s, cfg := newTestStore(t)
+	entry := makeEntry(format.ScopeUserPersonal, "direct to live")
+
+	path, err := s.WriteLive(entry)
+	if err != nil {
+		t.Fatalf("WriteLive: %v", err)
+	}
+	wantDir := filepath.Join(cfg.UserPersonalRoot, "lessons")
+	if !strings.HasPrefix(path, wantDir) {
+		t.Errorf("WriteLive path = %q, want prefix %q (live dir)", path, wantDir)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("WriteLive file does not exist: %v", err)
+	}
+}
+
+func TestWriteLiveReturnsErrEntryExistsOnConflict(t *testing.T) {
+	s, cfg := newTestStore(t)
+
+	// Place a file in the live dir first.
+	liveDir := filepath.Join(cfg.UserPersonalRoot, "lessons")
+	if err := os.MkdirAll(liveDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(liveDir, "already-there.md"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	entry := makeEntry(format.ScopeUserPersonal, "already there")
+	_, err := s.WriteLive(entry)
+	if !errors.Is(err, ErrEntryExists) {
+		t.Errorf("WriteLive duplicate: err = %v, want ErrEntryExists", err)
+	}
+}
+
+func TestWriteLiveNilEntryFails(t *testing.T) {
+	s, _ := newTestStore(t)
+	_, err := s.WriteLive(nil)
+	if err == nil {
+		t.Error("WriteLive(nil): expected error, got nil")
+	}
+}
+
+func TestWriteLiveProjectSharedScope(t *testing.T) {
+	s, cfg := newTestStore(t)
+	entry := makeEntry(format.ScopeProjectShared, "shared live entry")
+
+	path, err := s.WriteLive(entry)
+	if err != nil {
+		t.Fatalf("WriteLive project-shared: %v", err)
+	}
+	wantDir := filepath.Join(cfg.ProjectSharedRoot, "nodes")
+	if !strings.HasPrefix(path, wantDir) {
+		t.Errorf("WriteLive path = %q, want prefix %q (nodes dir)", path, wantDir)
 	}
 }
 

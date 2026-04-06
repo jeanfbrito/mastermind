@@ -37,7 +37,7 @@ confidence: high              # enum: high | medium | low (optional, default: hi
   - `war-story` — "Spent N hours/days on X, root cause was Y, fix was Z." Specific enough to teach, general enough to transfer.
   - `decision` — "Chose X over Y because of constraint Z." The *why* is what you forget.
   - `pattern` — "When I see shape-X, I try approach Y first." Reusable heuristic.
-  - `open-loop` — "I was about to do X but stopped. Resume when..." Unfinished work the user intended to return to. ADHD-specific kind; defaults to `scope: project-personal`; surfaced automatically at session start (see CONTINUITY.md); auto-expires after 30 days if not resolved via `mm_close_loop`.
+  - `open-loop` — "I was about to do X but stopped. Resume when..." Unfinished work the user intended to return to. ADHD-specific kind; defaults to `scope: project-personal`; surfaced automatically at session start (see CONTINUITY.md); resolved via `mm_close_loop`. Like all entries, open-loops are never silently deleted — they stay until explicitly resolved or removed.
 - **scope**: which of the three stores the entry belongs to. Exactly three values:
   - `user-personal` — lives at `~/.mm/lessons/<slug>.md`. Career-long, cross-project knowledge that follows you between machines.
   - `project-shared` — lives at `<repo>/.mm/nodes/<slug>.md`. Checked into the repo; shared with anyone who clones it.

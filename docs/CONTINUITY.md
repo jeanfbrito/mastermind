@@ -109,13 +109,14 @@ The format is deliberately dense and scannable. The agent reads it on its own an
 
 **The rules**:
 
-1. **Pending entries auto-expire after 7 days.** If the user hasn't reviewed it in a week, the tool silently deletes it. No nag. No "you missed these." The queue is either fresh or empty — never old and shameful.
-2. **One entry at a time, never a list.** When `/mm-review` runs, it shows exactly one candidate with three choices: keep, reject, edit. Lists trigger decision paralysis; single items don't.
-3. **Keyboard-driven, five seconds per entry.** `k` to keep, `x` to reject, `e` to edit, `n` to skip to next. No mouse, no ceremony, no "are you sure?" dialogs.
-4. **Default-accept for open-loops.** Open-loops are cheap if wrong (they expire) and expensive if missed (work lost). The review flow auto-accepts them unless the user explicitly rejects.
-5. **No counters, no streaks, no gamification.** Those are retention hooks for people with attention budgets. For ADHD they become another source of guilt when the streak breaks.
-6. **Silent when the queue is empty.** Session-start injection shows "Pending review: 0" only when nonzero. If zero, it shows nothing about pending.
-7. **No reminders. No notifications. No badges.** The tool is always silent unless the user asks.
+1. **Pending entries are kept indefinitely.** The queue is patient. Old entries are not shameful — they're waiting for a good day. The agent can help review them. Knowledge is never silently deleted. Optionally, a configurable auto-promote policy moves old candidates to the live store after N days (default: off). See DECISIONS.md "Reverse auto-expire" for the reasoning.
+2. **User-initiated writes bypass pending entirely.** When the user tells the agent to capture something (via `mm_write`), the entry goes directly to the live store. The user IS the review — they're present, they can see what the agent is writing, they chose to create it. Pending exists only for auto-captured knowledge (session-close extraction) where the user wasn't consciously involved.
+3. **One entry at a time, never a list.** When `/mm-review` runs, it shows exactly one candidate with three choices: keep, reject, edit. Lists trigger decision paralysis; single items don't.
+4. **Keyboard-driven, five seconds per entry.** `k` to keep, `x` to reject, `e` to edit, `n` to skip to next. No mouse, no ceremony, no "are you sure?" dialogs.
+5. **Default-accept for open-loops.** Open-loops are valuable if right and cheap to delete if wrong. The review flow auto-accepts them unless the user explicitly rejects.
+6. **No counters, no streaks, no gamification.** Those are retention hooks for people with attention budgets. For ADHD they become another source of guilt when the streak breaks.
+7. **Silent when the queue is empty.** Session-start injection shows pending count only when nonzero. If zero, it shows nothing about pending.
+8. **No reminders. No notifications. No badges.** The tool is always silent unless the user asks.
 
 **The review flow**:
 

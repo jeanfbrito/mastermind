@@ -180,7 +180,7 @@ func TestHandleSearchForwardsFilters(t *testing.T) {
 
 // ─── mm_write handler ─────────────────────────────────────────────────
 
-func TestHandleWriteLandsInPending(t *testing.T) {
+func TestHandleWriteLandsInLive(t *testing.T) {
 	srv, s := newTestServer(t)
 
 	_, out, err := srv.handleWrite(context.Background(), nil, WriteInput{
@@ -197,20 +197,29 @@ func TestHandleWriteLandsInPending(t *testing.T) {
 	if out.Path == "" {
 		t.Error("handleWrite: empty path in output")
 	}
-	if !strings.Contains(out.Path, "/pending/") {
-		t.Errorf("path should be in pending/: %s", out.Path)
+	// mm_write now goes directly to the live store — the user is present.
+	if strings.Contains(out.Path, "/pending/") {
+		t.Errorf("path should NOT be in pending/ (mm_write goes to live): %s", out.Path)
 	}
 	if out.Scope != "user-personal" {
 		t.Errorf("scope echo = %q, want user-personal", out.Scope)
 	}
 
-	// Confirm it's actually on disk and listable.
-	refs, err := s.ListPending(format.ScopeUserPersonal)
+	// Confirm it's in the live store and listable.
+	refs, err := s.ListLive(format.ScopeUserPersonal)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(refs) != 1 {
-		t.Errorf("ListPending = %d, want 1", len(refs))
+		t.Errorf("ListLive = %d, want 1", len(refs))
+	}
+	// Pending should be empty — mm_write skips the queue.
+	pendingRefs, err := s.ListPending(format.ScopeUserPersonal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pendingRefs) != 0 {
+		t.Errorf("ListPending = %d, want 0 (mm_write should not touch pending)", len(pendingRefs))
 	}
 }
 
@@ -277,22 +286,28 @@ func TestHandleWriteUnconfiguredScopeFails(t *testing.T) {
 // ─── mm_promote handler ────────────────────────────────────────────────
 
 func TestHandlePromoteEndToEnd(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, s := newTestServer(t)
 
-	// Write → promote via the two handlers.
-	_, writeOut, err := srv.handleWrite(context.Background(), nil, WriteInput{
-		Topic:   "promotion test",
-		Body:    "to be promoted",
-		Scope:   "user-personal",
-		Kind:    "lesson",
-		Project: "mastermind",
-	})
+	// mm_write now goes to live, so we use store.Write directly to
+	// place an entry in pending — simulating what the Phase 3
+	// session-close extraction pipeline will do.
+	entry := &format.Entry{
+		Metadata: format.Metadata{
+			Date:    "2026-04-06",
+			Topic:   "promotion test",
+			Kind:    format.KindLesson,
+			Scope:   format.ScopeUserPersonal,
+			Project: "mastermind",
+		},
+		Body: "to be promoted",
+	}
+	pendingPath, err := s.Write(entry)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	_, promoteOut, err := srv.handlePromote(context.Background(), nil, PromoteInput{
-		PendingPath: writeOut.Path,
+		PendingPath: pendingPath,
 	})
 	if err != nil {
 		t.Fatalf("handlePromote: %v", err)
@@ -358,11 +373,11 @@ func TestServerInstructionsMentionsProactiveUse(t *testing.T) {
 	}
 }
 
-func TestServerInstructionsMentionsPendingInvariant(t *testing.T) {
-	// The "never auto-promote" / "all writes go to pending" rule must
-	// be in the instructions, because the agent otherwise has no way
-	// to know that mm_write doesn't write to live.
+func TestServerInstructionsMentionsPendingForExtraction(t *testing.T) {
+	// The instructions must mention "pending" so the agent understands
+	// that auto-extracted entries (from session-close) land in pending
+	// and need review via mm_promote. mm_write itself goes to live.
 	if !strings.Contains(serverInstructions, "pending") {
-		t.Error("serverInstructions should mention the pending queue invariant")
+		t.Error("serverInstructions should mention pending (for auto-extracted entries)")
 	}
 }

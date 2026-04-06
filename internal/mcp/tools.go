@@ -93,11 +93,11 @@ func (s *Server) handleSearch(ctx context.Context, req *mcpsdk.CallToolRequest, 
 
 // ─── mm_write ───────────────────────────────────────────────────────────
 
-const mmWriteDescription = `Write a candidate entry to the user's pending-review queue.
-Use for explicit in-session captures. Never use for session summaries —
-those are extracted automatically at session close. All writes go to
-<scope>/pending/ and await user review. Never writes directly to the
-live store.`
+const mmWriteDescription = `Write an entry directly to the user's live knowledge store.
+Use for explicit in-session captures — the user is present and the
+write is their decision, so no second review step is needed. Never
+use for session summaries — those are extracted automatically at
+session close into pending/ for review.`
 
 // WriteInput is the wire schema for mm_write. The shape mirrors
 // format.Metadata but uses plain strings instead of enum types so the
@@ -113,11 +113,12 @@ type WriteInput struct {
 	Confidence string   `json:"confidence,omitempty" jsonschema:"high, medium, or low; defaults to high"`
 }
 
-// WriteOutput reports where the candidate landed and what scope/kind
-// it was routed to after normalization. Clients use this to confirm
-// the write succeeded and to show the user what to review.
+// WriteOutput reports where the entry landed and what scope/kind it
+// was routed to after normalization. Since mm_write goes directly to
+// the live store, the path is the final resting place — no promotion
+// needed.
 type WriteOutput struct {
-	Path  string `json:"path" jsonschema:"absolute path to the written pending file"`
+	Path  string `json:"path" jsonschema:"absolute path to the written live entry"`
 	Scope string `json:"scope" jsonschema:"scope the entry was routed to"`
 	Kind  string `json:"kind" jsonschema:"kind of the written entry"`
 }
@@ -148,7 +149,7 @@ func (s *Server) handleWrite(ctx context.Context, req *mcpsdk.CallToolRequest, i
 		return nil, WriteOutput{}, fmt.Errorf("mm_write: validation failed: %v", errs)
 	}
 
-	path, err := s.opts.Store.Write(entry)
+	path, err := s.opts.Store.WriteLive(entry)
 	if err != nil {
 		return nil, WriteOutput{}, fmt.Errorf("mm_write: %w", err)
 	}

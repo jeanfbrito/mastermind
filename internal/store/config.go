@@ -9,15 +9,33 @@ import (
 	"github.com/jeanfbrito/mastermind/internal/format"
 )
 
-// PendingTTL is how long a candidate may live in <scope>/pending/ before
-// the store deletes it on the next prune pass.
+// PendingPolicy controls what happens to entries that sit in pending/
+// without being reviewed.
 //
-// This is intentionally a constant, not a config field. See NON-GOALS.md
-// on "no per-project configuration sprawl" — an ADHD-shaped review queue
-// must have one well-known expiry window that future-you can remember
-// without checking settings. Seven days matches human "recent enough to
-// review while the context is still loaded in my head" intuition.
-const PendingTTL = 7 * 24 * time.Hour
+// The original design auto-deleted after 7 days ("no guilt queue"). That
+// was reversed because auto-DELETE is the only irreversible failure mode
+// in the system, and it punishes exactly the ADHD pattern mastermind is
+// designed for — a user who doesn't review for 10 days loses knowledge
+// silently. See DECISIONS.md "Reverse auto-expire" entry.
+type PendingPolicy string
+
+const (
+	// PendingKeepForever is the default: pending entries are never
+	// touched by the store. They stay until the user promotes, rejects,
+	// or manually deletes them. Old entries are not shameful — they're
+	// waiting for a good day.
+	PendingKeepForever PendingPolicy = "keep"
+
+	// PendingAutoPromote moves old pending entries to the live store
+	// after AutoPromoteAfter has elapsed. This is the "zero-maintenance"
+	// option: the knowledge is preserved, just not curated. Noise in the
+	// live store is fixable; lost knowledge isn't.
+	PendingAutoPromote PendingPolicy = "auto-promote"
+)
+
+// DefaultAutoPromoteAfter is the duration after which pending entries
+// are auto-promoted when PendingPolicy is PendingAutoPromote.
+const DefaultAutoPromoteAfter = 7 * 24 * time.Hour
 
 // Config points the store at the three scope roots on disk. Every field
 // is absolute. An empty field disables that scope entirely — useful in
@@ -43,8 +61,17 @@ type Config struct {
 	// In production: ~/.claude/projects/<repo>/memory/
 	ProjectPersonalRoot string
 
-	// Now is the time source used by the prune pass. Tests override this
-	// to control auto-expire behavior. If nil, time.Now is used.
+	// PendingBehavior controls what happens to unreviewed pending entries
+	// at startup. Default (zero value ""): treated as PendingKeepForever.
+	PendingBehavior PendingPolicy
+
+	// AutoPromoteAfter is the duration after which pending entries are
+	// auto-promoted to the live store. Only used when PendingBehavior is
+	// PendingAutoPromote. Zero value defaults to DefaultAutoPromoteAfter.
+	AutoPromoteAfter time.Duration
+
+	// Now is the time source used by the auto-promote pass. Tests
+	// override this to control timing behavior. If nil, time.Now is used.
 	Now func() time.Time
 }
 

@@ -157,8 +157,12 @@ appearing in future session-start injections.
 ## Critical rules
 
 - mm_search is read-only. Use it liberally.
-- mm_write always goes to pending/. Never to live.
-- mm_promote is user-gated. Never auto-promote.
+- mm_write writes directly to the live store — the user is present
+  and the write is their decision. No second review step needed.
+- mm_promote moves auto-extracted pending candidates to live. Only
+  call when the user has reviewed and approved a pending entry.
+  Pending entries come from automatic session-close extraction, not
+  from mm_write.
 - mm_close_loop should be called whenever the user signals closure,
   not just when they explicitly say "mark that done."
 - Session-start context injection and session-close extraction happen
