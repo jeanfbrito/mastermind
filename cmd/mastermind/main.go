@@ -84,11 +84,11 @@ func main() {
 // buildSessionConfig constructs a store.Config with all three scope
 // roots populated for the current session:
 //
-//   - UserPersonalRoot: ~/.mm (from store.DefaultConfig, which resolves
+//   - UserPersonalRoot: ~/.knowledge (from store.DefaultConfig, which resolves
 //     $HOME).
-//   - ProjectSharedRoot: <root>/.mm when walking upward from cwd finds
-//     a .mm/ directory. Left empty otherwise — the scope disables
-//     silently rather than creating a new .mm/ the user never asked for.
+//   - ProjectSharedRoot: <root>/.knowledge when walking upward from cwd finds
+//     a .knowledge/ directory. Left empty otherwise — the scope disables
+//     silently rather than creating a new .knowledge/ the user never asked for.
 //   - ProjectPersonalRoot: ~/.claude/projects/<slug>/memory when cwd is
 //     inside a git repository. The slug comes from project.DetectFromGit,
 //     which reads the origin remote first and falls back to the git
@@ -103,7 +103,7 @@ func main() {
 // machines (e.g., ~/Github/mastermind and ~/code/mastermind) map to
 // the same directory and the entries merge cleanly on sync. This is
 // load-bearing for the cross-machine memory story. See the promoted
-// pattern entry .mm/nodes/store-defaultconfig-returns-a-skeleton-...md
+// pattern entry .knowledge/nodes/store-defaultconfig-returns-a-skeleton-...md
 // and the closed open-loop that originally flagged this design call.
 //
 // Escape hatch for the edge case where a slug collision is unwanted
@@ -117,7 +117,7 @@ func buildSessionConfig(cwd string) (store.Config, error) {
 	}
 
 	if root := store.FindProjectRoot(cwd); root != "" {
-		cfg.ProjectSharedRoot = filepath.Join(root, ".mm")
+		cfg.ProjectSharedRoot = filepath.Join(root, ".knowledge")
 	}
 
 	if slug := project.DetectFromGit(cwd); slug != "" {
@@ -189,7 +189,7 @@ MCP tools (for agent use):
   mm_close_loop   Mark an open-loop as resolved (phase 3, not implemented)
 
 Setup:
-  mastermind expects a ~/.mm/ directory. Initialize it as a git repo
+  mastermind expects a ~/.knowledge/ directory. Initialize it as a git repo
   with a remote for cross-machine sync. Then add mastermind to your
   Claude Code MCP config:
 

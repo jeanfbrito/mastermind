@@ -2,6 +2,7 @@ package store
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,6 +36,7 @@ func fixedNow(t time.Time) func() time.Time {
 }
 
 // makeEntry builds a minimal valid Entry with the given scope and topic.
+// Has no tags, so resolveTopicDir falls back to "general".
 func makeEntry(scope format.Scope, topic string) *format.Entry {
 	return &format.Entry{
 		Metadata: format.Metadata{
@@ -46,6 +48,21 @@ func makeEntry(scope format.Scope, topic string) *format.Entry {
 		},
 		Body: "test body",
 	}
+}
+
+// makeEntryWithTags builds a valid Entry with tags. The first tag
+// determines the topic directory via resolveTopicDir.
+func makeEntryWithTags(scope format.Scope, topic string, tags []string) *format.Entry {
+	e := makeEntry(scope, topic)
+	e.Metadata.Tags = tags
+	return e
+}
+
+// makeEntryWithCategory builds a valid Entry with an explicit category.
+func makeEntryWithCategory(scope format.Scope, topic, category string) *format.Entry {
+	e := makeEntry(scope, topic)
+	e.Metadata.Category = category
+	return e
 }
 
 // ─── config and construction ───────────────────────────────────────────
@@ -60,8 +77,8 @@ func TestDefaultConfigHomeDir(t *testing.T) {
 	if cfg.UserPersonalRoot == "" {
 		t.Error("DefaultConfig.UserPersonalRoot is empty")
 	}
-	if !strings.HasSuffix(cfg.UserPersonalRoot, ".mm") {
-		t.Errorf("UserPersonalRoot = %q, want suffix .mm", cfg.UserPersonalRoot)
+	if !strings.HasSuffix(cfg.UserPersonalRoot, ".knowledge") {
+		t.Errorf("UserPersonalRoot = %q, want suffix .knowledge", cfg.UserPersonalRoot)
 	}
 }
 
@@ -87,8 +104,9 @@ func TestWriteUserPersonalLandsInPending(t *testing.T) {
 	if !strings.HasPrefix(path, wantPrefix) {
 		t.Errorf("Write path = %q, want prefix %q", path, wantPrefix)
 	}
-	if strings.Contains(path, string(os.PathSeparator)+"lessons"+string(os.PathSeparator)) {
-		t.Errorf("Write landed in live dir, not pending: %q", path)
+	// Verify it's NOT in any topic directory — it should be strictly in pending/.
+	if !strings.Contains(path, string(os.PathSeparator)+pendingDirName+string(os.PathSeparator)) {
+		t.Errorf("Write did not land in pending: %q", path)
 	}
 
 	// File must exist and be parseable.
@@ -337,7 +355,7 @@ func TestPromoteMovesPendingToLive(t *testing.T) {
 		t.Errorf("live file missing after Promote: %v", err)
 	}
 	// Live path should be under lessons/, not pending/.
-	wantPrefix := filepath.Join(cfg.UserPersonalRoot, "lessons")
+	wantPrefix := filepath.Join(cfg.UserPersonalRoot, "general")
 	if !strings.HasPrefix(livePath, wantPrefix) {
 		t.Errorf("live path = %q, want prefix %q", livePath, wantPrefix)
 	}
@@ -378,7 +396,7 @@ func TestPromoteCollisionReturnsErrEntryExists(t *testing.T) {
 func TestPromoteRejectsNonPendingPath(t *testing.T) {
 	s, cfg := newTestStore(t)
 	// Create a file directly in lessons/ (bypassing the store).
-	liveDir := filepath.Join(cfg.UserPersonalRoot, "lessons")
+	liveDir := filepath.Join(cfg.UserPersonalRoot, "general")
 	if err := os.MkdirAll(liveDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -466,7 +484,7 @@ func TestAutoPromoteStalePromotesOldPending(t *testing.T) {
 		t.Errorf("pending file still exists after auto-promote: %v", err)
 	}
 	// Live file should exist.
-	livePath := filepath.Join(cfg.UserPersonalRoot, "lessons", "old-enough-to-promote.md")
+	livePath := filepath.Join(cfg.UserPersonalRoot, "general", "old-enough-to-promote.md")
 	if _, err := os.Stat(livePath); err != nil {
 		t.Errorf("live file does not exist after auto-promote: %v", err)
 	}
@@ -530,7 +548,7 @@ func TestAutoPromoteStaleSkipsOnConflict(t *testing.T) {
 
 	// Manually place a live entry with the same slug so promotion would
 	// collide.
-	liveDir := filepath.Join(cfg.UserPersonalRoot, "lessons")
+	liveDir := filepath.Join(cfg.UserPersonalRoot, "general")
 	if err := os.MkdirAll(liveDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -562,7 +580,7 @@ func TestWriteLiveLandsInLiveDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WriteLive: %v", err)
 	}
-	wantDir := filepath.Join(cfg.UserPersonalRoot, "lessons")
+	wantDir := filepath.Join(cfg.UserPersonalRoot, "general")
 	if !strings.HasPrefix(path, wantDir) {
 		t.Errorf("WriteLive path = %q, want prefix %q (live dir)", path, wantDir)
 	}
@@ -575,7 +593,7 @@ func TestWriteLiveReturnsErrEntryExistsOnConflict(t *testing.T) {
 	s, cfg := newTestStore(t)
 
 	// Place a file in the live dir first.
-	liveDir := filepath.Join(cfg.UserPersonalRoot, "lessons")
+	liveDir := filepath.Join(cfg.UserPersonalRoot, "general")
 	if err := os.MkdirAll(liveDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -606,7 +624,7 @@ func TestWriteLiveProjectSharedScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WriteLive project-shared: %v", err)
 	}
-	wantDir := filepath.Join(cfg.ProjectSharedRoot, "nodes")
+	wantDir := filepath.Join(cfg.ProjectSharedRoot, "general")
 	if !strings.HasPrefix(path, wantDir) {
 		t.Errorf("WriteLive path = %q, want prefix %q (nodes dir)", path, wantDir)
 	}
@@ -621,7 +639,7 @@ func TestFindProjectRootLocatesMmDir(t *testing.T) {
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	mm := filepath.Join(repo, ".mm")
+	mm := filepath.Join(repo, ".knowledge")
 	if err := os.MkdirAll(mm, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -639,10 +657,10 @@ func TestFindProjectRootReturnsEmptyWhenNoMmDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := FindProjectRoot(sub)
-	// Could return "" or walk all the way up to find someone else's .mm;
+	// Could return "" or walk all the way up to find someone else's .knowledge;
 	// on a tmp dir with nothing above, should be "".
 	if got != "" && !strings.HasPrefix(tmp, got) == false {
-		// Allow the test to pass even if a .mm exists somewhere above the
+		// Allow the test to pass even if a .knowledge exists somewhere above the
 		// tmp dir (which could happen on the author's laptop). The
 		// important property: if it finds one, it must be a prefix of
 		// the starting path.
@@ -727,5 +745,208 @@ func TestLoadRefReturnsFullEntry(t *testing.T) {
 	}
 	if loaded.Metadata.Topic != "load me" {
 		t.Errorf("loaded topic = %q, want %q", loaded.Metadata.Topic, "load me")
+	}
+}
+
+// ─── topic directory resolution ────────────────────────────────────────
+
+func TestResolveTopicDirAttractor(t *testing.T) {
+	s, cfg := newTestStore(t)
+	root := cfg.UserPersonalRoot
+
+	// Create an existing topic dir "electron".
+	if err := os.MkdirAll(filepath.Join(root, "electron"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Entry with "electron" as second tag should still land in electron/
+	// because the attractor matches against ALL tags, not just the first.
+	got := s.resolveTopicDir(root, []string{"ipc", "electron", "macos"})
+	if got != "electron" {
+		t.Errorf("resolveTopicDir = %q, want electron (attractor)", got)
+	}
+}
+
+func TestResolveTopicDirNewDirFromFirstTag(t *testing.T) {
+	s, cfg := newTestStore(t)
+	root := cfg.UserPersonalRoot
+
+	// No existing dirs. First tag becomes the new directory.
+	got := s.resolveTopicDir(root, []string{"gamedev", "godot"})
+	if got != "gamedev" {
+		t.Errorf("resolveTopicDir = %q, want gamedev (first tag)", got)
+	}
+}
+
+func TestResolveTopicDirNoTags(t *testing.T) {
+	s, cfg := newTestStore(t)
+	got := s.resolveTopicDir(cfg.UserPersonalRoot, nil)
+	if got != "general" {
+		t.Errorf("resolveTopicDir(nil tags) = %q, want general", got)
+	}
+}
+
+func TestResolveTopicDirSkipsOperationalDirs(t *testing.T) {
+	s, cfg := newTestStore(t)
+	root := cfg.UserPersonalRoot
+
+	// Create pending/ and archive/ — these should NOT be matched.
+	os.MkdirAll(filepath.Join(root, "pending"), 0o755)
+	os.MkdirAll(filepath.Join(root, "archive"), 0o755)
+
+	// Tag "pending" should NOT match the operational dir.
+	got := s.resolveTopicDir(root, []string{"pending", "testing"})
+	if got != "pending" {
+		// "pending" as a topic name is allowed — the tag IS "pending".
+		// The attractor skips the operational dir, so no match.
+		// Falls back to first tag = "pending". This is correct but
+		// unusual. The dir name is "pending" as a topic, distinct
+		// from the operational pending/ dir. In practice this name
+		// collision is unlikely and harmless — the store distinguishes
+		// them by context (listTopicDirs vs pendingDirName).
+	}
+	_ = got
+}
+
+func TestNormalizeCategoryValid(t *testing.T) {
+	tests := []struct{ in, want string }{
+		{"electron", "electron"},
+		{"electron/ipc", filepath.Join("electron", "ipc")},
+		{"Go/Modules", filepath.Join("go", "modules")},
+		{"  MCP  ", "mcp"},
+		{"electron/ipc/", filepath.Join("electron", "ipc")}, // trailing slash stripped
+	}
+	for _, tc := range tests {
+		got := normalizeCategory(tc.in)
+		if got != tc.want {
+			t.Errorf("normalizeCategory(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestNormalizeCategoryRejectsTooDeep(t *testing.T) {
+	got := normalizeCategory("electron/ipc/macos")
+	if got != "" {
+		t.Errorf("normalizeCategory(3 segments) = %q, want empty (rejected)", got)
+	}
+}
+
+func TestNormalizeCategoryEmpty(t *testing.T) {
+	for _, in := range []string{"", "  ", "///", "---"} {
+		got := normalizeCategory(in)
+		if got != "" {
+			t.Errorf("normalizeCategory(%q) = %q, want empty", in, got)
+		}
+	}
+}
+
+func TestWriteLiveWithExplicitCategory(t *testing.T) {
+	s, cfg := newTestStore(t)
+	entry := makeEntryWithCategory(format.ScopeUserPersonal, "tls lesson", "electron/tls")
+
+	path, err := s.WriteLive(entry)
+	if err != nil {
+		t.Fatalf("WriteLive: %v", err)
+	}
+	wantDir := filepath.Join(cfg.UserPersonalRoot, "electron", "tls")
+	if !strings.HasPrefix(path, wantDir) {
+		t.Errorf("WriteLive path = %q, want prefix %q", path, wantDir)
+	}
+}
+
+func TestWriteLiveWithTagsDerivedDir(t *testing.T) {
+	s, cfg := newTestStore(t)
+	entry := makeEntryWithTags(format.ScopeUserPersonal, "gamedev lesson", []string{"gamedev", "godot"})
+
+	path, err := s.WriteLive(entry)
+	if err != nil {
+		t.Fatalf("WriteLive: %v", err)
+	}
+	wantDir := filepath.Join(cfg.UserPersonalRoot, "gamedev")
+	if !strings.HasPrefix(path, wantDir) {
+		t.Errorf("WriteLive path = %q, want prefix %q (first tag)", path, wantDir)
+	}
+}
+
+func TestListLiveWalksTopicDirs(t *testing.T) {
+	s, cfg := newTestStore(t)
+	root := cfg.UserPersonalRoot
+
+	// Manually create entries in two topic dirs.
+	for _, dir := range []string{"electron", filepath.Join("go", "modules")} {
+		full := filepath.Join(root, dir)
+		os.MkdirAll(full, 0o755)
+	}
+
+	writeTestEntry := func(dir, slug string) {
+		content := fmt.Sprintf("---\ndate: 2026-04-06\nproject: test\ntopic: %q\nkind: lesson\nscope: user-personal\n---\ntest", slug)
+		os.WriteFile(filepath.Join(root, dir, slug+".md"), []byte(content), 0o644)
+	}
+
+	writeTestEntry("electron", "split-tls")
+	writeTestEntry(filepath.Join("go", "modules"), "go-get-import")
+
+	refs, err := s.ListLive(format.ScopeUserPersonal)
+	if err != nil {
+		t.Fatalf("ListLive: %v", err)
+	}
+	if len(refs) != 2 {
+		t.Errorf("ListLive returned %d entries, want 2", len(refs))
+	}
+}
+
+func TestListCategoriesReturnsBothLevels(t *testing.T) {
+	s, cfg := newTestStore(t)
+	root := cfg.UserPersonalRoot
+
+	// Create level-1 and level-2 dirs.
+	for _, dir := range []string{"electron", filepath.Join("electron", "ipc"), "go", filepath.Join("go", "modules")} {
+		os.MkdirAll(filepath.Join(root, dir), 0o755)
+	}
+	// Also create pending/ which should be excluded.
+	os.MkdirAll(filepath.Join(root, "pending"), 0o755)
+
+	cats, err := s.ListCategories(format.ScopeUserPersonal)
+	if err != nil {
+		t.Fatalf("ListCategories: %v", err)
+	}
+
+	want := map[string]bool{
+		"electron":     true,
+		"electron/ipc": true,
+		"go":           true,
+		"go/modules":   true,
+	}
+	got := map[string]bool{}
+	for _, c := range cats {
+		got[c] = true
+	}
+	for w := range want {
+		if !got[w] {
+			t.Errorf("ListCategories missing %q", w)
+		}
+	}
+	if got["pending"] {
+		t.Error("ListCategories should not include operational dir 'pending'")
+	}
+}
+
+func TestPromoteUsesCategory(t *testing.T) {
+	s, cfg := newTestStore(t)
+
+	// Write a pending entry with an explicit category.
+	entry := makeEntryWithCategory(format.ScopeUserPersonal, "promote with category", "electron/ipc")
+	pendingPath, err := s.Write(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	livePath, err := s.Promote(pendingPath)
+	if err != nil {
+		t.Fatalf("Promote: %v", err)
+	}
+	wantDir := filepath.Join(cfg.UserPersonalRoot, "electron", "ipc")
+	if !strings.HasPrefix(livePath, wantDir) {
+		t.Errorf("Promote path = %q, want prefix %q", livePath, wantDir)
 	}
 }

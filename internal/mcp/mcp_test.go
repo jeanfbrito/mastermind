@@ -184,12 +184,13 @@ func TestHandleWriteLandsInLive(t *testing.T) {
 	srv, s := newTestServer(t)
 
 	_, out, err := srv.handleWrite(context.Background(), nil, WriteInput{
-		Topic:   "a new lesson",
-		Body:    "the body of the lesson",
-		Scope:   "user-personal",
-		Kind:    "lesson",
-		Project: "mastermind",
-		Tags:    []string{"test"},
+		Topic:    "a new lesson",
+		Body:     "the body of the lesson",
+		Scope:    "user-personal",
+		Kind:     "lesson",
+		Project:  "mastermind",
+		Tags:     []string{"test"},
+		Category: "testing",
 	})
 	if err != nil {
 		t.Fatalf("handleWrite: %v", err)
@@ -226,10 +227,11 @@ func TestHandleWriteLandsInLive(t *testing.T) {
 func TestHandleWriteDefaultsDate(t *testing.T) {
 	srv, _ := newTestServer(t)
 	_, out, err := srv.handleWrite(context.Background(), nil, WriteInput{
-		Topic:   "no date provided",
-		Body:    "x",
-		Scope:   "user-personal",
-		Kind:    "insight",
+		Topic:    "no date provided",
+		Body:     "x",
+		Scope:    "user-personal",
+		Kind:     "insight",
+		Category: "general",
 		Project: "mastermind",
 		// Date intentionally omitted
 	})

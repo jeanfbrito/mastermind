@@ -42,26 +42,26 @@ Then translate patterns to Go with the **official** SDK (`modelcontextprotocol/g
 
 - [ ] Add `github.com/modelcontextprotocol/go-sdk` to `go.mod`, pinned to v1.4.1 or latest stable in the 1.x line. Verify `go mod tidy` and `make build` still work.
 - [ ] `internal/format`: parse YAML frontmatter + markdown body, validate required fields (`date`, `project`, `topic`, `kind`), serialize back to markdown. Dependencies: `gopkg.in/yaml.v3` (or `github.com/adrg/frontmatter` — pick during implementation). Tested in isolation against fixture files in `internal/format/testdata/`.
-- [ ] `internal/store`: locate store roots (`~/.mm/` via $HOME, `<repo>/.mm/` via walk-up from cwd, Claude auto-memory dir), glob markdown entries, read/write via `format`, enforce the pending/ invariant (all writes land in `pending/` first). Auto-expire pending entries older than 7 days at startup. Tested against a `t.TempDir()` in unit tests.
+- [ ] `internal/store`: locate store roots (`~/.knowledge/` via $HOME, `<repo>/.knowledge/` via walk-up from cwd, Claude auto-memory dir), glob markdown entries, read/write via `format`, enforce the pending/ invariant (all writes land in `pending/` first). Auto-expire pending entries older than 7 days at startup. Tested against a `t.TempDir()` in unit tests.
 - [ ] `internal/search`: fan-out query against context-mode's FTS5 using the source-label convention (`mm:user`, `mm:user-archive`, `mm:project-shared:<repo>`, `mm:project-personal:<repo>`). Fallback grep path for environments without context-mode. Returns source-tagged ranked results.
 - [ ] `internal/mcp`: wire the MCP server over stdio using the official SDK. Register `mm_search`, `mm_write`, `mm_promote`, `mm_close_loop`. This is the only package that imports the SDK. One file (`mcp.go`) for the tool registrations, like engram.
 - [ ] `cmd/mastermind/main.go`: bootstrap — parse args, dispatch to MCP server mode (default) or to CLI subcommands (`session-start`, `session-close`, which arrive in Phase 3).
-- [ ] `~/.mm/` initialized as a real git repo with a remote (personal private repo). Seed with 3-5 hand-written entries in the FORMAT.md schema.
+- [ ] `~/.knowledge/` initialized as a real git repo with a remote (personal private repo). Seed with 3-5 hand-written entries in the FORMAT.md schema.
 - [ ] `/mm-search <query>` slash command (Claude Code wrapper) for manual testing.
 - [ ] Dogfood for a day. Query the seed entries. Confirm retrieval works and feels right.
 
-**Exit criteria**: `mm_search` returns correct, source-tagged results from a populated `~/.mm/` against real queries, `mm_write` + `mm_promote` correctly land entries in pending/ and move them to the live store, and the format has survived its first encounter with real entries without revealing major schema flaws.
+**Exit criteria**: `mm_search` returns correct, source-tagged results from a populated `~/.knowledge/` against real queries, `mm_write` + `mm_promote` correctly land entries in pending/ and move them to the live store, and the format has survived its first encounter with real entries without revealing major schema flaws.
 
-**Exit criteria**: you can search `~/.mm/` from Claude Code via `mm_search`, results are correct and source-tagged, and the format hasn't revealed any obvious flaws.
+**Exit criteria**: you can search `~/.knowledge/` from Claude Code via `mm_search`, results are correct and source-tagged, and the format hasn't revealed any obvious flaws.
 
 ## Phase 2 — project-shared store (1 day)
 
-- [ ] Convention for `<repo>/.mm/` directory layout.
-- [ ] mastermind auto-detects `.mm/` in the current working directory and includes it as a scope.
-- [ ] `/mm-init` slash command that explores the current repo with parallel subagents and seeds `<repo>/.mm/nodes/`. Reuse brv-init's approach, point at the new location.
+- [ ] Convention for `<repo>/.knowledge/` directory layout.
+- [ ] mastermind auto-detects `.knowledge/` in the current working directory and includes it as a scope.
+- [ ] `/mm-init` slash command that explores the current repo with parallel subagents and seeds `<repo>/.knowledge/nodes/`. Reuse brv-init's approach, point at the new location.
 - [ ] Test in one project (probably Rocket.Chat.Electron). Confirm team-shared entries are committed to git and survive a fresh clone.
 
-**Exit criteria**: one real repo has a populated `.mm/nodes/` dir, entries are in git, `mm_search` returns hits from it.
+**Exit criteria**: one real repo has a populated `.knowledge/nodes/` dir, entries are in git, `mm_search` returns hits from it.
 
 ## Phase 3 — capture & continuity (3-4 days)
 
@@ -70,10 +70,10 @@ This is the piece that makes or breaks the whole project. It is also the piece m
 ### Phase 3a — the extraction pipeline (1-2 days)
 
 - [ ] `prompts/extract.md` — the extraction prompt, versioned. Starts from the sketch in EXTRACTION.md. Includes open-loop detection, scope heuristics, six-kind taxonomy, JSON output schema.
-- [ ] LLM client: thin wrapper around the Claude API (direct HTTP, no SDK needed for Phase 3 — we're outside the MCP session when extraction runs). Reads `ANTHROPIC_API_KEY` from env or `~/.mm/config.json`.
+- [ ] LLM client: thin wrapper around the Claude API (direct HTTP, no SDK needed for Phase 3 — we're outside the MCP session when extraction runs). Reads `ANTHROPIC_API_KEY` from env or `~/.knowledge/config.json`.
 - [ ] Transcript loader: reads Claude Code transcript files from wherever they're stored, assembles them into a conversation object with timestamps (pattern from OpenViking).
 - [ ] Language detection: auto-detect conversation language, fall back to config (pattern from OpenViking).
-- [ ] Extraction runner: single-shot (not ReAct — see REFERENCE-NOTES.md for why), parses JSON response, validates against FORMAT.md schema, writes each valid candidate to `<scope>/pending/`. Logs to `~/.mm/logs/extraction.log`.
+- [ ] Extraction runner: single-shot (not ReAct — see REFERENCE-NOTES.md for why), parses JSON response, validates against FORMAT.md schema, writes each valid candidate to `<scope>/pending/`. Logs to `~/.knowledge/logs/extraction.log`.
 
 ### Phase 3b — session-close automation (1 day)
 
@@ -84,7 +84,7 @@ This is the piece that makes or breaks the whole project. It is also the piece m
 
 ### Phase 3c — session-start continuity layer (1 day)
 
-- [ ] `mastermind session-start --cwd <dir>` subcommand: walks up to find `.mm/`, queries all three scopes, assembles the continuity-injection block (open-loops, relevant lessons, pending count), writes to stdout for Claude Code to inject. <200ms target.
+- [ ] `mastermind session-start --cwd <dir>` subcommand: walks up to find `.knowledge/`, queries all three scopes, assembles the continuity-injection block (open-loops, relevant lessons, pending count), writes to stdout for Claude Code to inject. <200ms target.
 - [ ] Claude Code hook wiring for session-start.
 - [ ] Silent-unless-needed discipline: empty sections are omitted entirely. If all three sections (open-loops, lessons, pending) are empty, output nothing.
 - [ ] `mm_close_loop` MCP tool: agents call this when the user resolves an open-loop during a session. Moves the entry to `<scope>/resolved-loops/`.
@@ -108,7 +108,7 @@ This is the piece that makes or breaks the whole project. It is also the piece m
 
 ## Phase 4 — archive tier (1 day)
 
-- [ ] `~/.mm/archive/<year>/<project>/` directory structure.
+- [ ] `~/.knowledge/archive/<year>/<project>/` directory structure.
 - [ ] `mm_search` honors `include_archive=true` (default: false).
 - [ ] `/mm-archive <project>` command:
   - Finds all `lessons/*.md` with matching `project` frontmatter.
@@ -121,8 +121,8 @@ This is the piece that makes or breaks the whole project. It is also the piece m
 ## Phase 5 — sync (0.5 days)
 
 - [ ] Document the sync story per store in `docs/SYNC.md`.
-- [ ] Set up `~/.mm/` git remote on both your laptop and the Xeon machine. Verify two-way sync.
-- [ ] Optional: pre-session hook that runs `git pull` in `~/.mm/` before a session starts. Only add if you actually forget to pull manually.
+- [ ] Set up `~/.knowledge/` git remote on both your laptop and the Xeon machine. Verify two-way sync.
+- [ ] Optional: pre-session hook that runs `git pull` in `~/.knowledge/` before a session starts. Only add if you actually forget to pull manually.
 
 **Exit criteria**: an entry captured on the Xeon machine is searchable on the laptop after one `git pull`.
 

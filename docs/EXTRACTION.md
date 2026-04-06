@@ -28,7 +28,7 @@ Setup is a one-time cost: adding a hook line to the user's Claude Code config (`
 `mastermind session-close` receives the transcript path. It does three things and returns in <100ms:
 
 1. Validate the transcript file exists and is readable.
-2. Copy it to `~/.mm/sessions/<timestamp>-<session-id>/transcript.json` for later reference and auditability.
+2. Copy it to `~/.knowledge/sessions/<timestamp>-<session-id>/transcript.json` for later reference and auditability.
 3. Fork a detached subprocess for Phase 2 and exit successfully.
 
 The user's terminal gets control back instantly. Nothing visible happens. The session ended, that's it.
@@ -39,11 +39,11 @@ The forked subprocess runs the full extraction. Taking as long as it needs is fi
 
 1. **Load the transcript** from the archived location.
 2. **Assemble the conversation** with timestamps and language detection (pattern from OpenViking — see REFERENCE-NOTES.md).
-3. **Send to an LLM** via the Claude API with the extraction prompt (see prompt sketch below). The LLM is called directly, not through Claude Code — we're outside the session now. Credentials come from `ANTHROPIC_API_KEY` or `~/.mm/config.json`.
+3. **Send to an LLM** via the Claude API with the extraction prompt (see prompt sketch below). The LLM is called directly, not through Claude Code — we're outside the session now. Credentials come from `ANTHROPIC_API_KEY` or `~/.knowledge/config.json`.
 4. **Parse the response** into a list of candidate entries. Each candidate has: `scope`, `kind`, `topic`, body sections, proposed `confidence`, and tags.
-5. **Validate each candidate** against the FORMAT.md schema. Reject malformed ones silently (log to `~/.mm/logs/extraction.log`).
+5. **Validate each candidate** against the FORMAT.md schema. Reject malformed ones silently (log to `~/.knowledge/logs/extraction.log`).
 6. **Write each valid candidate** to the appropriate `<scope>/pending/` directory as a markdown file with full frontmatter.
-7. **Log telemetry**: phase timing, candidate count, validation reject count, final written count. Written to `~/.mm/logs/extraction.log`, never to stdout.
+7. **Log telemetry**: phase timing, candidate count, validation reject count, final written count. Written to `~/.knowledge/logs/extraction.log`, never to stdout.
 8. **Exit.**
 
 The user sees nothing. The next time they start a Claude Code session, the session-start hook (see CONTINUITY.md) surfaces "Pending review: N entries from the last M sessions" in the injected context. That's the only signal.
@@ -149,7 +149,7 @@ Several things to note about the prompt:
 
 Each valid candidate becomes a markdown file at `<scope>/pending/<timestamp>-<slug>.md`. The `<slug>` is kebab-case from the topic. The file looks exactly like a finished entry — same format, same frontmatter, same body structure — so review is just "read and decide." No format conversion during promote.
 
-Example output file at `~/.mm/pending/2026-04-04-143022-macos-electron-ipc.md`:
+Example output file at `~/.knowledge/pending/2026-04-04-143022-macos-electron-ipc.md`:
 
 ```markdown
 ---
@@ -170,8 +170,8 @@ confidence: high
 ### Extraction failure modes and handling
 
 - **Transcript unreadable**: log, skip Phase 2, user notices nothing.
-- **LLM API down**: log, retry once with backoff, then give up. Leave the transcript in `~/.mm/sessions/` for manual re-processing.
-- **Malformed LLM response**: log, write the raw response to `~/.mm/logs/failed-extractions/`, skip.
+- **LLM API down**: log, retry once with backoff, then give up. Leave the transcript in `~/.knowledge/sessions/` for manual re-processing.
+- **Malformed LLM response**: log, write the raw response to `~/.knowledge/logs/failed-extractions/`, skip.
 - **Candidate fails format validation**: log, skip that one candidate, keep the rest.
 - **No candidates at all**: that's fine, not a failure. Some sessions legitimately have nothing to extract.
 
@@ -189,7 +189,7 @@ Invocation:
 
 ```
 /mm-extract                 # extract from the current in-progress session
-/mm-extract --session <id>  # re-run against a past session from ~/.mm/sessions/
+/mm-extract --session <id>  # re-run against a past session from ~/.knowledge/sessions/
 /mm-extract --file <path>   # extract from an arbitrary markdown/text file
 ```
 
@@ -217,7 +217,7 @@ The full review flow is specified in CONTINUITY.md. Key rules (repeated here for
 
 ## What the extractor must NEVER do
 
-- Write to `~/.mm/lessons/` or `.mm/nodes/` directly. Always `pending/`.
+- Write to `~/.knowledge/lessons/` or `.knowledge/nodes/` directly. Always `pending/`.
 - Invent facts not present in the transcript.
 - Merge multiple unrelated ideas into one entry. One entry = one idea.
 - Extract more than ~8 candidates per session. High-signal only; if the session had 8 lessons it was probably a very good session, and if it had 15 the extractor is being noisy.

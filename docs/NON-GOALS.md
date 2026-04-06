@@ -48,7 +48,7 @@ mastermind is personal (user-personal store) and team-within-a-repo (project-sha
 The interface is: markdown files + git + MCP tool + slash commands. A web UI is a maintenance sink that doesn't solve any problem the filesystem doesn't already solve. If you want to browse entries in a GUI, use your editor.
 
 ### No encryption at rest
-The `~/.mm/` git repo sits on your disk, pushed to a private remote you control. Full-disk encryption (FileVault, LUKS) handles the rest. Don't build per-file encryption, per-field encryption, or "secure mode." If an entry is sensitive enough to need encryption, it's sensitive enough to not write down.
+The `~/.knowledge/` git repo sits on your disk, pushed to a private remote you control. Full-disk encryption (FileVault, LUKS) handles the rest. Don't build per-file encryption, per-field encryption, or "secure mode." If an entry is sensitive enough to need encryption, it's sensitive enough to not write down.
 
 ### No publishing mastermind as a product
 This tool is for you. It solves your problem. Open source it if you want, but don't design for users who aren't you. The moment you start caring about strangers' feature requests, the scope explodes.
@@ -68,13 +68,13 @@ Showing *why* a result was returned, at what rank, from what source. Not needed 
 Free-form tags will drift over years. A tool that suggests existing tags when you write an entry could help. Build only after tag drift becomes a real retrieval problem, not before.
 
 ### Public search index for open-source projects
-Some `<repo>/.mm/` content could usefully be published (docs site, searchable on the web). Nice idea. Different project.
+Some `<repo>/.knowledge/` content could usefully be published (docs site, searchable on the web). Nice idea. Different project.
 
 ## Tests for any new feature proposal
 
 Before adding *anything* to the roadmap, answer:
 
-1. **Does this work on plain `~/.mm/` without the tool?** If the feature requires the tool to be running, it's suspect. The corpus must outlive the tool.
+1. **Does this work on plain `~/.knowledge/` without the tool?** If the feature requires the tool to be running, it's suspect. The corpus must outlive the tool.
 2. **Does this survive a tool rewrite?** If a future rewrite would break the feature's data, the feature is storing something in the wrong place.
 3. **Is this solving a pain I've actually felt, or one I'm imagining?** Build from felt pain only.
 4. **Would a user five years from now still want this?** If it solves a 2026-specific problem, it's a distraction.

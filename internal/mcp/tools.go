@@ -109,6 +109,7 @@ type WriteInput struct {
 	Kind       string   `json:"kind" jsonschema:"required: lesson, insight, war-story, decision, pattern, or open-loop"`
 	Project    string   `json:"project" jsonschema:"project name; use 'general' for cross-project entries; required"`
 	Tags       []string `json:"tags,omitempty" jsonschema:"free-form lowercase tags"`
+	Category   string   `json:"category" jsonschema:"topic directory path (1-2 segments); e.g. 'electron/ipc', 'go/modules', 'testing'. Classify by SUBJECT, not context."`
 	Date       string   `json:"date,omitempty" jsonschema:"ISO 8601 capture date (YYYY-MM-DD); defaults to today UTC if omitted"`
 	Confidence string   `json:"confidence,omitempty" jsonschema:"high, medium, or low; defaults to high"`
 }
@@ -132,6 +133,7 @@ func (s *Server) handleWrite(ctx context.Context, req *mcpsdk.CallToolRequest, i
 			Topic:      in.Topic,
 			Kind:       format.Kind(in.Kind),
 			Scope:      format.Scope(in.Scope),
+			Category:   in.Category,
 			Confidence: format.Confidence(in.Confidence),
 		},
 		Body: in.Body,

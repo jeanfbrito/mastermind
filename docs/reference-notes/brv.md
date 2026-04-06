@@ -469,9 +469,9 @@ These design patterns/behaviors are clearly right:
 ## Summary for Mastermind Rewrite (Go)
 
 **What to keep:**
-- Markdown nodes in `.mm/knowledge-tree/` (local, repo-relative)
+- Markdown nodes in `.knowledge/knowledge-tree/` (local, repo-relative)
 - YAML frontmatter schema (name, tags, keywords, etc.)
-- Walk-up project detection (look for `.mm/config.json`)
+- Walk-up project detection (look for `.knowledge/config.json`)
 - Fire-and-forget curate pattern (async queueing)
 - Multi-tier query strategy (cache → direct → LLM)
 - Daemon/service architecture for query execution
@@ -493,7 +493,7 @@ mastermind/
   │   ├── query/               # Query execution (LLM optional)
   │   ├── project/             # Project detection + config
   │   └── mcp/                 # MCP server (optional initially)
-  ├── .mm/                     # Per-project storage
+  ├── .knowledge/              # Per-project storage
   │   ├── config.json
   │   ├── knowledge-tree/
   │   └── .snapshot.json

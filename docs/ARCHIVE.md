@@ -4,10 +4,10 @@ The archive solves the long-timeline problem: lessons from years ago shouldn't c
 
 ## Working set vs archive
 
-Only the **user-personal** store has an archive tier. Project stores don't need one — when a project ends, the whole `.mm/` directory retires with the repo.
+Only the **user-personal** store has an archive tier. Project stores don't need one — when a project ends, the whole `.knowledge/` directory retires with the repo.
 
 ```
-~/.mm/
+~/.knowledge/
 ├── lessons/          ← working set: always searched
 └── archive/<year>/<project>/  ← searched only with include_archive=true
 ```
@@ -32,11 +32,11 @@ when you're done with a project — leaving a job, shipping a final release, she
 
 ## What the archive command does
 
-1. **Identifies entries to archive.** Every entry in `~/.mm/lessons/` with `project: Rocket.Chat.Electron` in its frontmatter.
+1. **Identifies entries to archive.** Every entry in `~/.knowledge/lessons/` with `project: Rocket.Chat.Electron` in its frontmatter.
 2. **Proposes cross-project promotion.** For each entry, the extractor asks: "Is this lesson specific to this project, or does it apply to any Electron app / any debugging / any distributed system?" Cross-project candidates are flagged.
 3. **You review the promotion list.** For each flagged entry, accept (rewrite with `project: general` and keep in the working set) or reject (archive with the rest).
-4. **Moves non-promoted entries** into `~/.mm/archive/<current-year>/<project>/`.
-5. **Commits the move** in the `~/.mm/` git repo — archiving is a discrete, reviewable event.
+4. **Moves non-promoted entries** into `~/.knowledge/archive/<current-year>/<project>/`.
+5. **Commits the move** in the `~/.knowledge/` git repo — archiving is a discrete, reviewable event.
 
 The promotion step is the important one. Many lessons start as "I learned this about Project X" but are really "I learned this about the platform / the class of problem." Promoting them keeps the working set full of cross-cutting wisdom instead of project-specific trivia.
 
@@ -79,9 +79,9 @@ The agent should include the archive automatically when the working set returns 
 The archive is plain markdown under a predictable path. Any tool works:
 
 ```
-ls ~/.mm/archive/2024/RocketChatElectron/
-grep -rl "ipc" ~/.mm/archive/
-open ~/.mm/archive/2024/
+ls ~/.knowledge/archive/2024/RocketChatElectron/
+grep -rl "ipc" ~/.knowledge/archive/
+open ~/.knowledge/archive/2024/
 ```
 
 This matters. The tool is replaceable; the corpus must survive any tool's death. If mastermind stops existing tomorrow, everything you wrote is still plain markdown in a git repo you own.
@@ -94,10 +94,10 @@ This matters. The tool is replaceable; the corpus must survive any tool's death.
 
 ## Un-archiving
 
-Rare, but it happens: you return to a project, or an old lesson is suddenly relevant again. Just `mv` the file back to `~/.mm/lessons/`. It's files. No migration, no re-indexing, no metadata to update. The next FTS5 index rebuild picks it up.
+Rare, but it happens: you return to a project, or an old lesson is suddenly relevant again. Just `mv` the file back to `~/.knowledge/lessons/`. It's files. No migration, no re-indexing, no metadata to update. The next FTS5 index rebuild picks it up.
 
 ## The long timeline
 
-After 5 years, `~/.mm/archive/` might hold a few thousand entries across dozens of projects. Total size: megabytes. FTS5 search over it: still milliseconds. Git repo size: still trivial.
+After 5 years, `~/.knowledge/archive/` might hold a few thousand entries across dozens of projects. Total size: megabytes. FTS5 search over it: still milliseconds. Git repo size: still trivial.
 
 This is the design target. The archive should comfortably hold a 30-year career's worth of lessons without ever needing a database migration, a format change, or a tool rewrite. Plain markdown + git + FTS5 is enough. Keep it boring.

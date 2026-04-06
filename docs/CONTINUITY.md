@@ -19,7 +19,7 @@ These constraints lead to five behaviors that are **not optional features** — 
 
 ### 1. Session-start context injection (automatic, every time)
 
-**What**: Every time Claude Code opens in a directory with a `.mm/` or under a known project, mastermind automatically runs a query with the project as input and injects the most relevant context into the agent's starting prompt — *before the user has typed a character*.
+**What**: Every time Claude Code opens in a directory with a `.knowledge/` or under a known project, mastermind automatically runs a query with the project as input and injects the most relevant context into the agent's starting prompt — *before the user has typed a character*.
 
 **Why**: The "re-explain context to every agent" tax disappears. You open a new session, the agent already knows:
 
@@ -30,7 +30,7 @@ These constraints lead to five behaviors that are **not optional features** — 
 
 **How**: A Claude Code session-start hook runs a command like `mastermind session-start --cwd $PWD` which:
 
-1. Detects the project via walk-up from `$PWD` looking for `.mm/config.json` (brv pattern, adapted).
+1. Detects the project via walk-up from `$PWD` looking for `.knowledge/config.json` (brv pattern, adapted).
 2. Fans out queries to all three scopes, weighted by project relevance.
 3. Returns a compact markdown block — 500-1000 tokens max — that Claude Code injects as system context.
 4. Returns fast — under 200ms. If it can't, it returns nothing and logs a warning. Slow injection is worse than no injection.
@@ -68,7 +68,7 @@ The format is deliberately dense and scannable. The agent reads it on its own an
 2. Sends it to an LLM with the extraction prompt (adapted from OpenViking — see REFERENCE-NOTES.md).
 3. Writes each candidate to the appropriate `<scope>/pending/` directory.
 4. Returns immediately — the extraction runs detached (two-phase commit pattern from OpenViking).
-5. Logs to `~/.mm/logs/extraction.log` for debugging; silent otherwise.
+5. Logs to `~/.knowledge/logs/extraction.log` for debugging; silent otherwise.
 
 **What the user sees**: nothing, at close. The next time they open Claude Code in any project, the session-start injection mentions "You have N pending entries from the last M sessions." That's the only signal.
 

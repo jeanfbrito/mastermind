@@ -4,10 +4,12 @@ Every mastermind entry is a single markdown file with YAML frontmatter. **This f
 
 ## File location
 
-- Working set (user-personal): `~/.mm/lessons/<slug>.md`
-- Archive: `~/.mm/archive/<year>/<project>/<slug>.md`
-- Project-shared: `<repo>/.mm/nodes/<slug>.md`
+- Working set (user-personal): `~/.knowledge/<category>/<slug>.md`
+- Archive: `~/.knowledge/archive/<year>/<project>/<slug>.md`
+- Project-shared: `<repo>/.knowledge/<category>/<slug>.md`
 - Pending review: `<scope-root>/pending/<timestamp>-<slug>.md`
+
+Category is a topic directory (1-2 path segments, e.g. `electron/ipc`, `go/modules`, `testing`). Derived from the entry's `category` frontmatter field, or from the first tag if `category` is absent. Entries are organized by subject, not by the project context they were captured in.
 
 Filenames use kebab-case slugs. No spaces, no unicode, no dates in the filename (dates go in frontmatter).
 
@@ -21,6 +23,7 @@ tags: [electron, ipc, macos]  # free-form, lowercase, plural OK
 topic: "One-line summary"     # human headline, used in search previews
 kind: lesson                  # enum: lesson | insight | war-story | decision | pattern | open-loop
 scope: user-personal          # enum: user-personal | project-shared | project-personal
+category: "electron/ipc"     # topic directory path (1-2 segments, optional, derived from first tag if omitted)
 confidence: high              # enum: high | medium | low (optional, default: high)
 ---
 ```
@@ -39,11 +42,12 @@ confidence: high              # enum: high | medium | low (optional, default: hi
   - `pattern` — "When I see shape-X, I try approach Y first." Reusable heuristic.
   - `open-loop` — "I was about to do X but stopped. Resume when..." Unfinished work the user intended to return to. ADHD-specific kind; defaults to `scope: project-personal`; surfaced automatically at session start (see CONTINUITY.md); resolved via `mm_close_loop`. Like all entries, open-loops are never silently deleted — they stay until explicitly resolved or removed.
 - **scope**: which of the three stores the entry belongs to. Exactly three values:
-  - `user-personal` — lives at `~/.mm/lessons/<slug>.md`. Career-long, cross-project knowledge that follows you between machines.
-  - `project-shared` — lives at `<repo>/.mm/nodes/<slug>.md`. Checked into the repo; shared with anyone who clones it.
-  - `project-personal` — lives at `~/.claude/projects/<project>/memory/nodes/<slug>.md`. Machine-local notes about a specific project you don't want to share with collaborators; the default for `open-loop` entries.
+  - `user-personal` — lives at `~/.knowledge/lessons/<slug>.md`. Career-long, cross-project knowledge that follows you between machines.
+  - `project-shared` — lives at `<repo>/.knowledge/<category>/<slug>.md`. Checked into the repo; shared with anyone who clones it.
+  - `project-personal` — lives at `~/.claude/projects/<project>/memory/<category>/<slug>.md`. Machine-local notes about a specific project you don't want to share with collaborators; the default for `open-loop` entries.
 
   Optional in frontmatter for hand-placed files (the store can infer it from the directory the file lives in) but **required** when capturing via `mm_write`, because the tool has to decide which store root to target before the file exists on disk.
+- **category**: topic directory path for organizing entries by subject. Max 2 path segments (e.g. `"electron/ipc"`, `"go/modules"`, `"testing"`). Classify by the SUBJECT of the lesson, not the context it was discovered in. Optional — if omitted, the store derives it from the first tag (or `"general"` if no tags). When the agent calls `mm_write`, it should always provide a category.
 - **confidence**: how sure you are. `high` = battle-tested, `medium` = strong hunch, `low` = half-remembered intuition. Lets future-you weight old entries appropriately.
 
 ## Body structure
@@ -81,6 +85,7 @@ tags: [electron, ipc, macos, debugging, main-process]
 topic: "macOS Electron IPC hangs when main process blocks on sync I/O"
 kind: lesson
 scope: user-personal
+category: "electron/ipc"
 confidence: high
 ---
 

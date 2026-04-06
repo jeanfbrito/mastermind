@@ -82,8 +82,8 @@ type EntryRef struct {
 }
 
 // FindProjectRoot walks upward from cwd looking for the nearest directory
-// containing a .mm/ subdirectory. Returns the absolute path of the repo
-// root (the directory containing .mm/), or "" if nothing is found before
+// containing a .knowledge/ subdirectory. Returns the absolute path of the repo
+// root (the directory containing .knowledge/), or "" if nothing is found before
 // reaching the filesystem root.
 //
 // This is used by session-start and session-close to locate the
@@ -100,7 +100,7 @@ func FindProjectRoot(cwd string) string {
 	// Walk upward. filepath.Dir on a root path returns the root itself,
 	// so compare before/after to detect the top.
 	for {
-		candidate := filepath.Join(abs, ".mm")
+		candidate := filepath.Join(abs, ".knowledge")
 		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
 			return abs
 		}
@@ -196,7 +196,12 @@ func (s *Store) Promote(pendingPath string) (string, error) {
 		return "", fmt.Errorf("store: parse pending %s: %w", abs, err)
 	}
 
-	liveDirPath := filepath.Join(root, liveDir(scope))
+	topicDir := normalizeCategory(entry.Metadata.Category)
+	if topicDir == "" {
+		topicDir = s.resolveTopicDir(root, entry.Metadata.Tags)
+	}
+
+	liveDirPath := filepath.Join(root, topicDir)
 	if err := os.MkdirAll(liveDirPath, 0o755); err != nil {
 		return "", fmt.Errorf("store: mkdir live: %w", err)
 	}
@@ -246,8 +251,68 @@ func (s *Store) ListLive(scope format.Scope) ([]EntryRef, error) {
 	if root == "" {
 		return nil, nil
 	}
-	dir := filepath.Join(root, liveDir(sk))
-	return s.listDir(dir, scope, false)
+	return s.listLiveRecursive(root, scope)
+}
+
+// listLiveRecursive walks all topic subdirectories under root,
+// collecting .md entries. It skips operational dirs (pending/,
+// archive/) and also picks up .md files at the root level
+// (uncategorized entries). This is the retrieval side of the
+// topic-directory system — it doesn't care about the tree shape,
+// it just finds every .md entry.
+func (s *Store) listLiveRecursive(root string, scope format.Scope) ([]EntryRef, error) {
+	var refs []EntryRef
+
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
+			return err
+		}
+
+		// Skip operational directories entirely.
+		if d.IsDir() && d.Name() != filepath.Base(root) {
+			if operationalDirs[d.Name()] {
+				return filepath.SkipDir
+			}
+			return nil // descend into topic dirs
+		}
+
+		if d.IsDir() || !strings.HasSuffix(d.Name(), ".md") {
+			return nil
+		}
+
+		// Skip files directly inside pending/ (handled by ListPending).
+		rel, _ := filepath.Rel(root, path)
+		if strings.HasPrefix(rel, pendingDirName+string(filepath.Separator)) {
+			return nil
+		}
+
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return nil // skip unreadable files
+		}
+		entry, parseErr := format.Parse(data)
+		if parseErr != nil {
+			return nil // skip malformed files
+		}
+		refs = append(refs, EntryRef{
+			Path:     path,
+			Metadata: entry.Metadata,
+			Scope:    scope,
+			Pending:  false,
+		})
+		return nil
+	})
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("store: walk live %s: %w", root, err)
+	}
+
+	sort.Slice(refs, func(i, j int) bool {
+		return refs[i].Path < refs[j].Path
+	})
+	return refs, nil
 }
 
 // LoadRef reads the full entry body from a ref and returns a complete
@@ -375,7 +440,12 @@ func (s *Store) WriteLive(entry *format.Entry) (string, error) {
 		return "", fmt.Errorf("%w: scope %q is valid but has no root configured in this session (caller forgot to wire it, see cmd/mastermind/main.go:runMCPServer)", ErrInvalidScope, entry.Metadata.Scope)
 	}
 
-	liveDirPath := filepath.Join(root, liveDir(scope))
+	topicDir := normalizeCategory(entry.Metadata.Category)
+	if topicDir == "" {
+		topicDir = s.resolveTopicDir(root, entry.Metadata.Tags)
+	}
+
+	liveDirPath := filepath.Join(root, topicDir)
 	if err := os.MkdirAll(liveDirPath, 0o755); err != nil {
 		return "", fmt.Errorf("store: mkdir live: %w", err)
 	}
@@ -398,6 +468,102 @@ func (s *Store) WriteLive(entry *format.Entry) (string, error) {
 		return "", fmt.Errorf("store: atomic write %s: %w", target, err)
 	}
 	return target, nil
+}
+
+// ─── topic directory resolution ────────────────────────────────────────
+
+// resolveTopicDir determines the topic directory for an entry based on
+// its tags and the existing directory structure. This is the fallback
+// path for entries without an explicit Category field.
+//
+// The algorithm uses an "attractor" pattern:
+//  1. List existing subdirectories under root (skip operational dirs)
+//  2. For each tag, check if it matches an existing directory name
+//  3. If a match is found → use that directory (first match wins)
+//  4. If no match → use the first tag as a new directory
+//  5. If no tags → "general"
+//
+// Fallback resolution only produces level-1 directories (single
+// segment). Level-2 subdirectories require the agent's explicit
+// Category field — the store doesn't guess at sub-topics.
+func (s *Store) resolveTopicDir(root string, tags []string) string {
+	existing := s.listTopicDirs(root)
+
+	// Attractor: match any tag against existing directory names.
+	for _, tag := range tags {
+		normalized := slugifySegment(tag)
+		if normalized == "" {
+			continue
+		}
+		for _, dir := range existing {
+			if normalized == dir {
+				return dir
+			}
+		}
+	}
+
+	// No match — use first tag as a new directory.
+	if len(tags) > 0 {
+		if s := slugifySegment(tags[0]); s != "" {
+			return s
+		}
+	}
+
+	return "general"
+}
+
+// listTopicDirs returns the names of immediate subdirectories under
+// root that are NOT operational directories. These are the level-1
+// topic directories used by the attractor pattern.
+func (s *Store) listTopicDirs(root string) []string {
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil
+	}
+	var dirs []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if operationalDirs[e.Name()] {
+			continue
+		}
+		dirs = append(dirs, e.Name())
+	}
+	return dirs
+}
+
+// ListCategories returns all existing topic directory paths across
+// both levels for the given scope. Useful for agents to check existing
+// categories before creating new ones.
+//
+// Returns paths like ["electron", "electron/ipc", "go", "mcp"].
+func (s *Store) ListCategories(scope format.Scope) ([]string, error) {
+	sk := scopeFromFormat(scope)
+	root := s.cfg.rootFor(sk)
+	if sk == scopeUnknown {
+		return nil, fmt.Errorf("%w: %q", ErrInvalidScope, scope)
+	}
+	if root == "" {
+		return nil, nil
+	}
+
+	var categories []string
+	level1 := s.listTopicDirs(root)
+	for _, d1 := range level1 {
+		categories = append(categories, d1)
+		// Check for level-2 subdirs.
+		sub, err := os.ReadDir(filepath.Join(root, d1))
+		if err != nil {
+			continue
+		}
+		for _, d2 := range sub {
+			if d2.IsDir() && !operationalDirs[d2.Name()] {
+				categories = append(categories, d1+"/"+d2.Name())
+			}
+		}
+	}
+	return categories, nil
 }
 
 // ─── internal helpers ───────────────────────────────────────────────────

@@ -42,7 +42,7 @@ understanding, or tag gaps — without flooding the main context.
 ### 3. The "breakdown" concept — emergent theme detection
 /wiki breakdown scans for concrete nouns appearing across 3+ articles
 without their own page, then creates stubs. The mastermind equivalent:
-scan ~/.mm/lessons/ for tags appearing in 3+ entries that have no
+scan ~/.knowledge/lessons/ for tags appearing in 3+ entries that have no
 "pattern" or "insight" entry synthesizing the recurring theme. This
 is the "what have I learned about [electron] across all my war
 stories?" question, answered mechanically. Genuinely new idea

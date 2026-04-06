@@ -50,6 +50,7 @@ type Metadata struct {
 	Topic      string     `yaml:"topic"`                // one-line human summary
 	Kind       Kind       `yaml:"kind"`                 // enum: lesson, insight, war-story, decision, pattern, open-loop
 	Scope      Scope      `yaml:"scope,omitempty"`      // enum: user-personal, project-shared, project-personal
+	Category   string     `yaml:"category,omitempty"`   // topic directory path, max 2 segments (e.g. "electron/ipc")
 	Confidence Confidence `yaml:"confidence,omitempty"` // enum: high, medium, low (default: high)
 }
 

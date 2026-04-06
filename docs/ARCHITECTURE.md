@@ -37,22 +37,22 @@ mastermind/
 
 | Scope | Path | Sync | Visible to |
 |---|---|---|---|
-| **project-shared** | `<repo>/.mm/` | git (part of the repo) | anyone who clones the repo |
+| **project-shared** | `<repo>/.knowledge/` | git (part of the repo) | anyone who clones the repo |
 | **project-personal** | `~/.claude/projects/<repo>/memory/` | personal git repo | only you |
-| **user-personal** | `~/.mm/` | personal git repo with remote | only you, across projects and years |
+| **user-personal** | `~/.knowledge/` | personal git repo with remote | only you, across projects and years |
 
 Two of the three already exist physically:
 - Claude Code's auto-memory dir already acts as project-personal.
 - Your existing `~/.claude/lessons.md` is the seed of user-personal (mastermind reads it in place initially, no migration).
 
-The only **new** store on disk is project-shared (`<repo>/.mm/`).
+The only **new** store on disk is project-shared (`<repo>/.knowledge/`).
 
 ## Directory layout
 
-### user-personal (`~/.mm/`)
+### user-personal (`~/.knowledge/`)
 
 ```
-~/.mm/
+~/.knowledge/
 ├── FORMAT.md                    # the one immutable contract
 ├── lessons/                     # working set (always searched)
 │   ├── electron-ipc-macos.md
@@ -71,10 +71,10 @@ The only **new** store on disk is project-shared (`<repo>/.mm/`).
 └── .git/                        # sync via git remote
 ```
 
-### project-shared (`<repo>/.mm/`)
+### project-shared (`<repo>/.knowledge/`)
 
 ```
-<repo>/.mm/
+<repo>/.knowledge/
 ├── nodes/                       # curated team knowledge
 │   ├── auth-architecture.md
 │   ├── build-pipeline.md
@@ -83,7 +83,7 @@ The only **new** store on disk is project-shared (`<repo>/.mm/`).
     └── 2026-04-04-deployment-gotcha.md
 ```
 
-No archive tier in project-shared. Projects end; the whole `.mm/` dir goes with the repo.
+No archive tier in project-shared. Projects end; the whole `.knowledge/` dir goes with the repo.
 
 ### project-personal (existing Claude auto-memory)
 
@@ -111,8 +111,8 @@ Four tools total, forever. Adding a fifth requires a DECISIONS.md entry with a j
 
 Two subcommands are **not** MCP tools — they are CLI commands invoked by Claude Code hooks, outside the MCP protocol. They read/write the same store but run as short-lived subprocesses, not tool calls inside a running session.
 
-1. **`mastermind session-start --cwd <dir>`** — invoked by a Claude Code session-start hook. Walks up from `--cwd` to find the nearest `.mm/` (if any), queries all three scopes, assembles the continuity-injection block (open-loops, relevant lessons, pending count), and writes it to stdout for Claude Code to inject as system context. Must return in <200ms. If slow, returns nothing silently. See CONTINUITY.md.
-2. **`mastermind session-close --transcript <path>`** — invoked by a Claude Code session-close hook. Phase 1 (sync): validates and archives the transcript to `~/.mm/sessions/<timestamp>-<session-id>/`, forks a detached Phase 2 subprocess, returns immediately (<100ms target). Phase 2 (detached): loads the archived transcript, calls the extraction LLM, writes candidates to `<scope>/pending/`, logs telemetry. See EXTRACTION.md.
+1. **`mastermind session-start --cwd <dir>`** — invoked by a Claude Code session-start hook. Walks up from `--cwd` to find the nearest `.knowledge/` (if any), queries all three scopes, assembles the continuity-injection block (open-loops, relevant lessons, pending count), and writes it to stdout for Claude Code to inject as system context. Must return in <200ms. If slow, returns nothing silently. See CONTINUITY.md.
+2. **`mastermind session-close --transcript <path>`** — invoked by a Claude Code session-close hook. Phase 1 (sync): validates and archives the transcript to `~/.knowledge/sessions/<timestamp>-<session-id>/`, forks a detached Phase 2 subprocess, returns immediately (<100ms target). Phase 2 (detached): loads the archived transcript, calls the extraction LLM, writes candidates to `<scope>/pending/`, logs telemetry. See EXTRACTION.md.
 
 These two subcommands are the load-bearing mechanism for the continuity layer. They convert mastermind from "a memory tool you use" into "a memory layer that runs silently." See CONTINUITY.md for why this distinction matters for the primary user.
 
@@ -124,8 +124,8 @@ Slash commands live in Claude Code configuration, not in mastermind's binary. Ea
 - `/mm-review` — starts the pending/ review flow (one entry at a time, keyboard-driven). See CONTINUITY.md for rules.
 - `/mm-curate <text>` — manual one-shot entry creation. Prompts for scope and kind, builds frontmatter, writes via `mm_write`.
 - `/mm-extract` — fallback manual extraction. Same pipeline as session-close, triggered explicitly. See EXTRACTION.md for why this is secondary.
-- `/mm-archive <project>` — project transition. Finds all entries with matching project frontmatter, proposes cross-project promotion, moves non-promoted entries to `~/.mm/archive/<year>/<project>/`.
-- `/mm-init` — warmup for a new project. Explores the codebase and seeds `<repo>/.mm/nodes/` with initial curated knowledge.
+- `/mm-archive <project>` — project transition. Finds all entries with matching project frontmatter, proposes cross-project promotion, moves non-promoted entries to `~/.knowledge/archive/<year>/<project>/`.
+- `/mm-init` — warmup for a new project. Explores the codebase and seeds `<repo>/.knowledge/nodes/` with initial curated knowledge.
 
 ## Claude Code hook integration
 
@@ -135,7 +135,7 @@ Mastermind depends on two Claude Code hooks being registered in the user's Claud
 ```
 mastermind session-start --cwd "$PWD"
 ```
-Output (stdout) is injected as system context before the first user turn. Silent if no `.mm/` is found or all context sections are empty.
+Output (stdout) is injected as system context before the first user turn. Silent if no `.knowledge/` is found or all context sections are empty.
 
 **session-close hook** (runs when Claude Code closes a session):
 ```
@@ -152,9 +152,9 @@ If Claude Code's hook API surface doesn't support these exact lifecycle events, 
 1. Agent calls `mm_search("electron ipc weird behavior")`.
 2. mastermind reads from all three stores (or the configured subset).
 3. Each markdown file was indexed into context-mode's FTS5 on startup with a source label:
-   - `mm:user` for `~/.mm/lessons/`
-   - `mm:user-archive` for `~/.mm/archive/` (only loaded when `include_archive=true`)
-   - `mm:project-shared:<repo>` for `<repo>/.mm/nodes/`
+   - `mm:user` for `~/.knowledge/lessons/`
+   - `mm:user-archive` for `~/.knowledge/archive/` (only loaded when `include_archive=true`)
+   - `mm:project-shared:<repo>` for `<repo>/.knowledge/nodes/`
    - `mm:project-personal:<repo>` for Claude auto-memory
 4. FTS5 returns ranked hits. mastermind merges, dedupes trivially by path, and returns source-tagged results.
 
@@ -180,7 +180,7 @@ This single rule prevents the main failure mode: junk entries polluting the corp
 | Store | How it syncs |
 |---|---|
 | project-shared | git, part of the repo, zero new infrastructure |
-| user-personal | `~/.mm/` is itself a git repo with a remote (private GitHub repo, Gitea, whatever). `git pull` on the other machine. Optionally: pre-session hook auto-pulls. |
+| user-personal | `~/.knowledge/` is itself a git repo with a remote (private GitHub repo, Gitea, whatever). `git pull` on the other machine. Optionally: pre-session hook auto-pulls. |
 | project-personal | separate personal git repo that tracks `~/.claude/projects/*/memory/`, or accept it as machine-local |
 
 No daemon, no Syncthing, no S3, no cloud service. Git is the only sync mechanism. If a machine is offline, mastermind still works against the local copy.

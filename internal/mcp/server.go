@@ -159,6 +159,14 @@ appearing in future session-start injections.
 - mm_search is read-only. Use it liberally.
 - mm_write writes directly to the live store — the user is present
   and the write is their decision. No second review step needed.
+  You MUST provide a category (topic directory path, 1-2 segments).
+  Classify by the SUBJECT of the lesson, not the context you were in:
+  - Level 1: primary technology or domain (electron, go, mcp, testing)
+  - Level 2 (optional): subtopic when meaningful (electron/ipc, go/modules)
+  - If a Jitsi lesson was discovered while debugging Electron, use "jitsi"
+  - If a general gamedev principle was learned in Godot, use "gamedev"
+  - Check existing .knowledge/ directories for consistency before
+    creating new categories.
 - mm_promote moves auto-extracted pending candidates to live. Only
   call when the user has reviewed and approved a pending entry.
   Pending entries come from automatic session-close extraction, not

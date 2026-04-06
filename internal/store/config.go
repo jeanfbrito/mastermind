@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/jeanfbrito/mastermind/internal/format"
@@ -42,15 +43,15 @@ const DefaultAutoPromoteAfter = 7 * 24 * time.Hour
 // tests and during Phase 1 dogfooding, when only user-personal may exist.
 type Config struct {
 	// UserPersonalRoot is the root of the user-personal store.
-	// In production: ~/.mm/
+	// In production: ~/.knowledge/
 	// The "live" entries live directly under this directory in /lessons/.
 	// Pending candidates land in /pending/. Archive tier lives in
 	// /archive/<year>/<project>/ and is managed separately.
 	UserPersonalRoot string
 
 	// ProjectSharedRoot is the root of the project-shared store — the
-	// repo-local .mm/ directory at a project root.
-	// In production: <repo>/.mm/
+	// repo-local .knowledge/ directory at a project root.
+	// In production: <repo>/.knowledge/
 	// This is per-session: the value depends on which project the user
 	// is currently working in, so it's typically set by the caller after
 	// calling store.FindProjectRoot(cwd).
@@ -77,7 +78,7 @@ type Config struct {
 
 // DefaultConfig returns a Config populated from the user's environment:
 //
-//   - UserPersonalRoot = ~/.mm/
+//   - UserPersonalRoot = ~/.knowledge/
 //   - ProjectSharedRoot = "" (caller must set via FindProjectRoot)
 //   - ProjectPersonalRoot = ~/.claude/projects/<unknown>/memory/
 //     (caller should re-set with the real project name)
@@ -90,7 +91,7 @@ func DefaultConfig() (Config, error) {
 		return Config{}, fmt.Errorf("store: resolve home dir: %w", err)
 	}
 	return Config{
-		UserPersonalRoot: filepath.Join(home, ".mm"),
+		UserPersonalRoot: filepath.Join(home, ".knowledge"),
 		// ProjectSharedRoot is left empty on purpose. It's per-session.
 		ProjectPersonalRoot: "", // caller fills this after project detection
 		Now:                 time.Now,
@@ -138,23 +139,73 @@ func (c Config) rootFor(s scopeKind) string {
 	}
 }
 
-// liveDir is the subdirectory under a scope root where promoted (live)
-// entries live. For user-personal, this is "lessons/". For project
-// scopes, it's "nodes/". The difference reflects the different roles
-// of the two kinds of store: user-personal is a lessons journal,
-// project-shared is a team knowledge base.
-func liveDir(s scopeKind) string {
-	switch s {
-	case scopeUser:
-		return "lessons"
-	case scopeProjectShared, scopeProjectPersonal:
-		return "nodes"
-	default:
-		return ""
-	}
+// operationalDirs are subdirectories that are NOT topic directories.
+// resolveTopicDir and ListLive skip these when scanning for topics.
+var operationalDirs = map[string]bool{
+	"pending": true,
+	"archive": true,
 }
 
 // pendingDir is "pending" for every scope. Consistency matters more
 // than scope-specific naming here — the review flow walks pending/ in
 // every scope the same way.
 const pendingDirName = "pending"
+
+// normalizeCategory validates and normalizes a category path string.
+// Returns the normalized path or "" if the input is empty/invalid.
+//
+// Rules:
+//   - Lowercase, slugify each segment (same rules as entry slugs)
+//   - Max 2 path segments (one "/" allowed): "electron/ipc" is valid,
+//     "electron/ipc/macos" is rejected (returns "")
+//   - Leading/trailing slashes stripped
+//   - Empty segments collapsed
+func normalizeCategory(cat string) string {
+	cat = strings.TrimSpace(cat)
+	if cat == "" {
+		return ""
+	}
+
+	// Split, slugify each part, drop empties.
+	raw := strings.Split(cat, "/")
+	var parts []string
+	for _, p := range raw {
+		s := slugifySegment(p)
+		if s != "" {
+			parts = append(parts, s)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	if len(parts) > 2 {
+		return "" // max 2 segments enforced
+	}
+	return strings.Join(parts, string(filepath.Separator))
+}
+
+// slugifySegment normalizes a single path segment: lowercase, ASCII
+// letters and digits only, dashes between words, capped at 40 chars.
+// Shorter cap than entry slugs because directory names should be terse.
+func slugifySegment(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	prevDash := false
+	for _, r := range strings.ToLower(s) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			prevDash = false
+		default:
+			if !prevDash && b.Len() > 0 {
+				b.WriteByte('-')
+				prevDash = true
+			}
+		}
+	}
+	result := strings.TrimRight(b.String(), "-")
+	if len(result) > 40 {
+		result = strings.TrimRight(result[:40], "-")
+	}
+	return result
+}

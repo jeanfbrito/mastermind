@@ -104,13 +104,13 @@ keywords: ["jwt", "token", "expiry", "24h"]
 
 brv identifies nodes by **file path relative to `.brv/context-tree/`** — no explicit ID field. Mastermind adopts the same model (path = identity). We extend with: `date`, `project`, `topic`, `kind`, `confidence` (see FORMAT.md for the full schema).
 
-brv's directory convention is `.brv/context-tree/{domain}/{category}/{node-name}.md`. Mastermind uses `.mm/nodes/{slug}.md` for project-shared (flatter — we don't need the two-level domain/category hierarchy at our scale) and `~/.mm/lessons/{slug}.md` for user-personal. Simpler is better.
+brv's directory convention is `.brv/context-tree/{domain}/{category}/{node-name}.md`. Mastermind uses `.knowledge/nodes/{slug}.md` for project-shared (flatter — we don't need the two-level domain/category hierarchy at our scale) and `~/.knowledge/lessons/{slug}.md` for user-personal. Simpler is better.
 
 **Hub coupling analysis (critical)**: brv's hub is **tightly coupled architecturally but optional functionally**. Core query/curate works without the hub, but hub code is woven through transport handlers, config store, auth flow, keychain integration. There is **no flag to disable it**; it's just harmless if unused. This confirms the rewrite-don't-fork decision — cleanly extracting the non-hub core from the brv codebase would be surgery, not refactoring.
 
 **Things to steal from brv's behavior**:
 
-- Walk-up project detection (look for `.mm/config.json` upward from cwd).
+- Walk-up project detection (look for `.knowledge/config.json` upward from cwd).
 - Fire-and-forget curate pattern (the write returns immediately, index updates async).
 - Multi-tier retrieval strategy (cache → local search → LLM) — for Phase 1 we only need the local search tier.
 - Markdown + YAML frontmatter as the storage format.
@@ -230,12 +230,12 @@ Across all four sources, the things to explicitly avoid:
 2. **Distribution** (engram): `.goreleaser.yaml`, darwin/linux/windows × amd64/arm64, Homebrew tap.
 3. **MCP wiring** (official SDK examples + kubernetes-mcp-server): `mcp.NewServer` + `mcp.AddTool[In, Out]` with struct tags.
 4. **Tool registration convention** (engram's `internal/mcp/mcp.go`): single file, one function per tool.
-5. **Node format** (brv, validated): markdown + YAML frontmatter, path = identity, stored in `.mm/nodes/` (project) or `~/.mm/lessons/` (user).
+5. **Node format** (brv, validated): markdown + YAML frontmatter, path = identity, stored in `.knowledge/nodes/` (project) or `~/.knowledge/lessons/` (user).
 6. **Two-phase commit for extraction** (OpenViking): fast archive + async extraction.
 7. **Transcript-with-timestamps prompt construction** (OpenViking).
 8. **Scope assignment via a schema field** (OpenViking `memory_type` → mastermind `scope` + `kind`).
 9. **`.overview.md` index files per scope root** (OpenViking): auto-updated on write, agent-browsable without a query.
-10. **Walk-up project detection** (brv): find nearest `.mm/` ancestor from cwd.
+10. **Walk-up project detection** (brv): find nearest `.knowledge/` ancestor from cwd.
 11. **Fire-and-forget curate UX** (brv): the write returns immediately, indexing is async.
 12. **Atomic file writes** (rtk): tempfile + rename for every store write.
 13. **Error wrapping with context** (rtk → Go's `fmt.Errorf("...: %w", err)`).

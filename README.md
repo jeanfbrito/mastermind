@@ -39,16 +39,16 @@ What's missing today: a place to keep the hard-won lessons, war stories, decisio
 
 | Scope | Location | Sync | Visibility |
 |---|---|---|---|
-| **project-shared** | `<repo>/.mm/` | git (checked in) | team |
+| **project-shared** | `<repo>/.knowledge/` | git (checked in) | team |
 | **project-personal** | `~/.claude/projects/<repo>/memory/` (existing) | personal git repo | only you |
-| **user-personal** | `~/.mm/` | personal git repo with remote | only you, across all projects and years |
+| **user-personal** | `~/.knowledge/` | personal git repo with remote | only you, across all projects and years |
 
 One query layer fans out to all three, source-tagged results, ranked union.
 
 ## The two tiers (user-personal only)
 
-- **Working set** (`~/.mm/lessons/`): current, always searched.
-- **Archive** (`~/.mm/archive/<year>/<project>/`): old, searched only with `include_archive=true`.
+- **Working set** (`~/.knowledge/lessons/`): current, always searched.
+- **Archive** (`~/.knowledge/archive/<year>/<project>/`): old, searched only with `include_archive=true`.
 
 Archive is triggered manually via `/mm-archive <project>` when you leave a project. Cross-project lessons get promoted to the general working set before the rest is archived.
 

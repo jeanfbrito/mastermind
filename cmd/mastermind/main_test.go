@@ -44,7 +44,7 @@ func withFakeHome(t *testing.T) string {
 }
 
 // TestBuildSessionConfigUserPersonalOnly exercises the baseline case:
-// cwd is a plain directory with no git and no .mm/ anywhere in its
+// cwd is a plain directory with no git and no .knowledge/ anywhere in its
 // ancestors. UserPersonalRoot must be populated from $HOME, the
 // other two scopes must be empty (disabled silently).
 func TestBuildSessionConfigUserPersonalOnly(t *testing.T) {
@@ -57,12 +57,12 @@ func TestBuildSessionConfigUserPersonalOnly(t *testing.T) {
 		t.Fatalf("buildSessionConfig: %v", err)
 	}
 
-	wantUser := filepath.Join(home, ".mm")
+	wantUser := filepath.Join(home, ".knowledge")
 	if cfg.UserPersonalRoot != wantUser {
 		t.Errorf("UserPersonalRoot = %q, want %q", cfg.UserPersonalRoot, wantUser)
 	}
 	if cfg.ProjectSharedRoot != "" {
-		t.Errorf("ProjectSharedRoot = %q, want empty (no .mm/ in tree)", cfg.ProjectSharedRoot)
+		t.Errorf("ProjectSharedRoot = %q, want empty (no .knowledge/ in tree)", cfg.ProjectSharedRoot)
 	}
 	if cfg.ProjectPersonalRoot != "" {
 		t.Errorf("ProjectPersonalRoot = %q, want empty (no git in tree)", cfg.ProjectPersonalRoot)
@@ -70,14 +70,14 @@ func TestBuildSessionConfigUserPersonalOnly(t *testing.T) {
 }
 
 // TestBuildSessionConfigProjectSharedWhenMmExists covers the case
-// where cwd is inside a repo with a .mm/ directory. ProjectSharedRoot
-// must point at that .mm/. ProjectPersonalRoot stays empty because
+// where cwd is inside a repo with a .knowledge/ directory. ProjectSharedRoot
+// must point at that .knowledge/. ProjectPersonalRoot stays empty because
 // the directory is not a git repo.
 func TestBuildSessionConfigProjectSharedWhenMmExists(t *testing.T) {
 	withFakeHome(t)
 
 	repoRoot := t.TempDir()
-	mmDir := filepath.Join(repoRoot, ".mm")
+	mmDir := filepath.Join(repoRoot, ".knowledge")
 	if err := os.MkdirAll(mmDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -160,14 +160,14 @@ func TestBuildSessionConfigProjectPersonalPrefersRemoteOverBasename(t *testing.T
 
 // TestBuildSessionConfigAllThreeScopesWhenRepoHasMmAndGit covers the
 // happy-path for a fully-configured session: a git repo that also has
-// a .mm/ directory. All three scope roots must be populated.
+// a .knowledge/ directory. All three scope roots must be populated.
 func TestBuildSessionConfigAllThreeScopesWhenRepoHasMmAndGit(t *testing.T) {
 	needGit(t)
 	home := withFakeHome(t)
 
 	parent := t.TempDir()
 	repoDir := filepath.Join(parent, "fullproject")
-	if err := os.MkdirAll(filepath.Join(repoDir, ".mm"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(repoDir, ".knowledge"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	initGitRepo(t, repoDir)
@@ -177,11 +177,11 @@ func TestBuildSessionConfigAllThreeScopesWhenRepoHasMmAndGit(t *testing.T) {
 		t.Fatalf("buildSessionConfig: %v", err)
 	}
 
-	if cfg.UserPersonalRoot != filepath.Join(home, ".mm") {
-		t.Errorf("UserPersonalRoot = %q, want %q", cfg.UserPersonalRoot, filepath.Join(home, ".mm"))
+	if cfg.UserPersonalRoot != filepath.Join(home, ".knowledge") {
+		t.Errorf("UserPersonalRoot = %q, want %q", cfg.UserPersonalRoot, filepath.Join(home, ".knowledge"))
 	}
-	if cfg.ProjectSharedRoot != filepath.Join(repoDir, ".mm") {
-		t.Errorf("ProjectSharedRoot = %q, want %q", cfg.ProjectSharedRoot, filepath.Join(repoDir, ".mm"))
+	if cfg.ProjectSharedRoot != filepath.Join(repoDir, ".knowledge") {
+		t.Errorf("ProjectSharedRoot = %q, want %q", cfg.ProjectSharedRoot, filepath.Join(repoDir, ".knowledge"))
 	}
 	if cfg.ProjectPersonalRoot != filepath.Join(home, ".claude", "projects", "fullproject", "memory") {
 		t.Errorf("ProjectPersonalRoot = %q, want ~/.claude/projects/fullproject/memory", cfg.ProjectPersonalRoot)

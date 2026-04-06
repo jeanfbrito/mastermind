@@ -105,16 +105,16 @@ make install      # copies bin/mastermind to ~/.local/bin/ (verify first)
 
 1. **Small doc cleanup**: update DECISIONS.md to record the Go minimum bump (1.22 → 1.25, forced by the MCP SDK) and confirm the Phase 1 test-count baseline (91 tests across 6 packages).
 2. **`mastermind mcp` end-to-end smoke test against a real Claude Code session.** Add mastermind to the Claude Code MCP config (see the help text from `./bin/mastermind --help` for the JSON snippet), restart Claude Code, call `mm_search` from inside a session with the `~/Github/mastermind` directory as cwd, verify it returns correctly formatted results.
-3. **Initialize `~/.mm/` as a real git repo with a private remote.** Hand-write 3-5 real lessons in the FORMAT.md schema from actual engineering experience. **This is the single most important moment in the project** — it's the first contact between the locked format and real knowledge. If an entry reveals the format is wrong, fix it now before there are more than 5 entries to migrate.
+3. **Initialize `~/.knowledge/` as a real git repo with a private remote.** Hand-write 3-5 real lessons in the FORMAT.md schema from actual engineering experience. **This is the single most important moment in the project** — it's the first contact between the locked format and real knowledge. If an entry reveals the format is wrong, fix it now before there are more than 5 entries to migrate.
 4. **Query the seed entries with `mm_search`.** Confirm the markdown output is readable, ranking is sensible, and `[scope]` tags appear correctly in results.
-5. **Only after 1-4 work**: `/mm-init` warmup and the project-shared store (`<repo>/.mm/`) on a real repo.
+5. **Only after 1-4 work**: `/mm-init` warmup and the project-shared store (`<repo>/.knowledge/`) on a real repo.
 
 Phase 3 (capture hooks + review flow) comes after Phase 2 stabilizes. Don't start Phase 3 until Phase 2 has been dogfooded for at least a few days.
 
 ## Self-critique notes from Phase 1 (worth remembering)
 
 - **`mm_close_loop` is a stub.** Registered so agents learn it exists, but the handler returns "not implemented, see Phase 3c." If an agent tries to resolve a loop, it gets a clear error. Expected through Phase 3c.
-- **`PruneStale` errors are silently discarded** in `main.go` per the silent-unless-needed rule. Phase 6 should add a structured log at `~/.mm/logs/mastermind.log` with one line per prune error, still silent to the user but inspectable.
+- **`PruneStale` errors are silently discarded** in `main.go` per the silent-unless-needed rule. Phase 6 should add a structured log at `~/.knowledge/logs/mastermind.log` with one line per prune error, still silent to the user but inspectable.
 - **`main.go` has no tests.** Subcommand dispatch is trivial enough to survive without them for now, but a `TestMainDispatch` would be cheap to add later.
 - **`session-start` and `session-close` subcommands are stubs** with Phase 3 pointers. They'll be written alongside the extraction pipeline in Phase 3.
 
