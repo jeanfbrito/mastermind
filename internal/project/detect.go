@@ -161,6 +161,24 @@ func extractRepoName(url string) string {
 	return url[cut+1:]
 }
 
+// GitRoot returns the absolute path of the git working tree root for dir,
+// or empty string if dir is not inside a git repo. This is the full path
+// (not just the basename) — used by callers that need to create directories
+// at the repo root (e.g., auto-initializing .knowledge/).
+func GitRoot(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	if strings.HasPrefix(dir, "-") {
+		dir = "./" + dir
+	}
+	out, err := runGit(dir, 2*time.Second, "rev-parse", "--show-toplevel")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
 // runGit executes `git -C <dir> <args...>` with a timeout and returns stdout.
 // Errors (including timeout, non-zero exit, missing binary) are returned
 // opaquely — callers only care whether detection succeeded, not why.

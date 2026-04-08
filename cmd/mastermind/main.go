@@ -23,9 +23,11 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
+	"sort"
 	"strings"
 	"syscall"
 
+	"github.com/jeanfbrito/mastermind/internal/format"
 	"github.com/jeanfbrito/mastermind/internal/mcp"
 	"github.com/jeanfbrito/mastermind/internal/project"
 	"github.com/jeanfbrito/mastermind/internal/search"
@@ -56,9 +58,11 @@ func main() {
 			printHelp()
 			return
 		case "session-start":
-			// TODO(phase3c): implement in CONTINUITY.md phase 3c.
-			fmt.Fprintln(os.Stderr, "mastermind session-start: not implemented yet — see docs/CONTINUITY.md and docs/ROADMAP.md Phase 3c")
-			os.Exit(1)
+			if err := runSessionStart(); err != nil {
+				fmt.Fprintf(os.Stderr, "mastermind session-start: %s\n", err)
+				os.Exit(1)
+			}
+			return
 		case "session-close":
 			// TODO(phase3b): implement in CONTINUITY.md phase 3b.
 			fmt.Fprintln(os.Stderr, "mastermind session-close: not implemented yet — see docs/EXTRACTION.md and docs/ROADMAP.md Phase 3b")
@@ -118,6 +122,17 @@ func buildSessionConfig(cwd string) (store.Config, error) {
 
 	if root := store.FindProjectRoot(cwd); root != "" {
 		cfg.ProjectSharedRoot = filepath.Join(root, ".knowledge")
+	} else if os.Getenv("MASTERMIND_NO_AUTO_INIT") == "" {
+		// Auto-create .knowledge/ at the git root so project-shared
+		// scope works out of the box. Without this, agents silently
+		// fall back to user-personal and project-specific lessons get
+		// lost. Opt out with MASTERMIND_NO_AUTO_INIT=1.
+		if gitRoot := project.GitRoot(cwd); gitRoot != "" {
+			knowledgeDir := filepath.Join(gitRoot, ".knowledge")
+			if err := os.MkdirAll(knowledgeDir, 0o755); err == nil {
+				cfg.ProjectSharedRoot = knowledgeDir
+			}
+		}
 	}
 
 	if slug := project.DetectFromGit(cwd); slug != "" {
@@ -171,13 +186,205 @@ func runMCPServer() error {
 	return server.Run(ctx)
 }
 
+// runSessionStart implements the session-start subcommand. It prints
+// compact markdown to stdout summarizing open loops, project-relevant
+// entries, and pending counts. The output is injected as system context
+// by the Claude Code SessionStart hook.
+//
+// If there is nothing to surface, it prints nothing and exits 0.
+// This honors the silent-unless-needed rule from CONTINUITY.md.
+func runSessionStart() error {
+	cwd := parseCwdFlag()
+	cfg, err := buildSessionConfig(cwd)
+	if err != nil {
+		return fmt.Errorf("build session config: %w", err)
+	}
+
+	s := store.New(cfg)
+	projectName := project.DetectFromGit(cwd)
+
+	// Collect open loops from all scopes (live + pending).
+	openLoops, err := collectOpenLoops(s)
+	if err != nil {
+		return fmt.Errorf("collect open loops: %w", err)
+	}
+
+	// Collect project-relevant entries (non-open-loop).
+	projectEntries, err := collectProjectEntries(s, projectName)
+	if err != nil {
+		return fmt.Errorf("collect project entries: %w", err)
+	}
+
+	// Count pending entries across all scopes.
+	pendingCount, err := countPending(s)
+	if err != nil {
+		return fmt.Errorf("count pending: %w", err)
+	}
+
+	output := formatSessionStart(openLoops, projectEntries, pendingCount)
+	if output != "" {
+		fmt.Print(output)
+	}
+	return nil
+}
+
+// parseCwdFlag scans os.Args for --cwd <path> after the subcommand.
+// Falls back to os.Getwd().
+func parseCwdFlag() string {
+	for i := 2; i < len(os.Args)-1; i++ {
+		if os.Args[i] == "--cwd" {
+			return os.Args[i+1]
+		}
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	return cwd
+}
+
+// collectOpenLoops gathers all open-loop entries from live and pending
+// across all three scopes. Open loops are the most critical thing to
+// surface — they represent in-progress work that would otherwise be
+// forgotten.
+func collectOpenLoops(s *store.Store) ([]store.EntryRef, error) {
+	var loops []store.EntryRef
+
+	for _, scope := range format.AllScopes() {
+		live, err := s.ListLive(scope)
+		if err != nil {
+			return nil, err
+		}
+		for _, ref := range live {
+			if ref.Metadata.Kind == format.KindOpenLoop {
+				loops = append(loops, ref)
+			}
+		}
+
+		pending, err := s.ListPending(scope)
+		if err != nil {
+			return nil, err
+		}
+		for _, ref := range pending {
+			if ref.Metadata.Kind == format.KindOpenLoop {
+				loops = append(loops, ref)
+			}
+		}
+	}
+
+	// Sort by date descending (newest first).
+	sortByDateDesc(loops)
+	return loops, nil
+}
+
+// collectProjectEntries gathers non-open-loop entries relevant to the
+// current project. From project-shared and project-personal scopes it
+// takes everything; from user-personal it filters by project name.
+// Returns at most 5 entries, sorted by date descending.
+func collectProjectEntries(s *store.Store, projectName string) ([]store.EntryRef, error) {
+	var entries []store.EntryRef
+
+	// Project-shared and project-personal: all entries are project-relevant by definition.
+	for _, scope := range []format.Scope{format.ScopeProjectShared, format.ScopeProjectPersonal} {
+		live, err := s.ListLive(scope)
+		if err != nil {
+			return nil, err
+		}
+		for _, ref := range live {
+			if ref.Metadata.Kind != format.KindOpenLoop {
+				entries = append(entries, ref)
+			}
+		}
+	}
+
+	// User-personal: only entries matching the current project.
+	if projectName != "" {
+		live, err := s.ListLive(format.ScopeUserPersonal)
+		if err != nil {
+			return nil, err
+		}
+		for _, ref := range live {
+			if ref.Metadata.Kind != format.KindOpenLoop &&
+				strings.EqualFold(ref.Metadata.Project, projectName) {
+				entries = append(entries, ref)
+			}
+		}
+	}
+
+	sortByDateDesc(entries)
+
+	// Cap at 5.
+	if len(entries) > 5 {
+		entries = entries[:5]
+	}
+	return entries, nil
+}
+
+// countPending returns the total number of pending entries across all scopes.
+func countPending(s *store.Store) (int, error) {
+	var count int
+	for _, scope := range format.AllScopes() {
+		refs, err := s.ListPending(scope)
+		if err != nil {
+			return 0, err
+		}
+		count += len(refs)
+	}
+	return count, nil
+}
+
+// formatSessionStart renders the session-start output as compact markdown.
+// Returns empty string when there's nothing to surface.
+func formatSessionStart(openLoops, projectEntries []store.EntryRef, pendingCount int) string {
+	if len(openLoops) == 0 && len(projectEntries) == 0 && pendingCount == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("## mastermind\n\n")
+
+	if len(openLoops) > 0 {
+		fmt.Fprintf(&b, "**Open loops** (%d):\n", len(openLoops))
+		for _, ref := range openLoops {
+			fmt.Fprintf(&b, "- %s (%s)\n", ref.Metadata.Topic, ref.Metadata.Date)
+		}
+		b.WriteByte('\n')
+	}
+
+	if len(projectEntries) > 0 {
+		fmt.Fprintf(&b, "**Project knowledge** (%d entries):\n", len(projectEntries))
+		for _, ref := range projectEntries {
+			fmt.Fprintf(&b, "- %s · %s\n", ref.Metadata.Topic, ref.Metadata.Kind)
+		}
+		b.WriteByte('\n')
+	}
+
+	if pendingCount > 0 {
+		fmt.Fprintf(&b, "**Pending review**: %d entries awaiting review.\n\n", pendingCount)
+	}
+
+	b.WriteString("_Use mm_search before complex tasks. Call mm_write to capture lessons as you work._\n")
+	return b.String()
+}
+
+// sortByDateDesc sorts entry refs by date descending (newest first).
+// Entries with identical dates are sorted by path for determinism.
+func sortByDateDesc(refs []store.EntryRef) {
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].Metadata.Date != refs[j].Metadata.Date {
+			return refs[i].Metadata.Date > refs[j].Metadata.Date
+		}
+		return refs[i].Path < refs[j].Path
+	})
+}
+
 func printHelp() {
 	fmt.Fprintf(os.Stderr, `mastermind %s — the ADHD cure for agents that you always dreamed for yourself
 
 Usage:
   mastermind                    Start MCP server over stdio (default; used by Claude Code)
   mastermind mcp                Explicit: start MCP server
-  mastermind session-start      Claude Code session-start hook (phase 3c, not implemented)
+  mastermind session-start      Claude Code session-start hook (surfaces open loops + project context)
   mastermind session-close      Claude Code session-close hook (phase 3b, not implemented)
   mastermind version            Print version and exit
   mastermind help               Show this help
