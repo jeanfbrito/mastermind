@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
@@ -27,6 +28,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/jeanfbrito/mastermind/internal/extract"
 	"github.com/jeanfbrito/mastermind/internal/format"
 	"github.com/jeanfbrito/mastermind/internal/mcp"
 	"github.com/jeanfbrito/mastermind/internal/project"
@@ -67,6 +69,12 @@ func main() {
 			// TODO(phase3b): implement in CONTINUITY.md phase 3b.
 			fmt.Fprintln(os.Stderr, "mastermind session-close: not implemented yet — see docs/EXTRACTION.md and docs/ROADMAP.md Phase 3b")
 			os.Exit(1)
+		case "extract":
+			if err := runExtract(); err != nil {
+				fmt.Fprintf(os.Stderr, "mastermind extract: %s\n", err)
+				os.Exit(1)
+			}
+			return
 		case "mcp":
 			// Explicit MCP mode (matches engram's convention: `engram mcp`
 			// to start the stdio server). Fall through to default.
@@ -365,6 +373,157 @@ func formatSessionStart(openLoops, projectEntries []store.EntryRef, pendingCount
 
 	b.WriteString("_Use mm_search before complex tasks. Call mm_write to capture lessons as you work._\n")
 	return b.String()
+}
+
+// ─── extract subcommand ────────────────────────────────────────────────
+
+// hookInput is the JSON structure Claude Code sends to hooks on stdin.
+type hookInput struct {
+	TranscriptPath string `json:"transcript_path"`
+	SessionID      string `json:"session_id"`
+	Cwd            string `json:"cwd"`
+}
+
+// runExtract implements the extract subcommand. It reads the conversation
+// transcript (either from a hook's stdin JSON or from a --transcript flag)
+// and extracts knowledge entries into pending/.
+//
+// Extraction mode is controlled by env vars:
+//   - MASTERMIND_EXTRACT_MODE: "keyword" (default) or "llm"
+//   - MASTERMIND_LLM_PROVIDER: "anthropic" (default) or "ollama"
+//   - MASTERMIND_LLM_MODEL: model identifier
+func runExtract() error {
+	var transcriptPath, cwd string
+
+	// Check for --from-hook flag: read JSON from stdin.
+	fromHook := false
+	for _, arg := range os.Args[2:] {
+		if arg == "--from-hook" {
+			fromHook = true
+		}
+	}
+
+	if fromHook {
+		var input hookInput
+		if err := json.NewDecoder(os.Stdin).Decode(&input); err != nil {
+			return fmt.Errorf("decode hook input: %w", err)
+		}
+		transcriptPath = input.TranscriptPath
+		cwd = input.Cwd
+	} else {
+		// Manual mode: --transcript <path>
+		for i := 2; i < len(os.Args)-1; i++ {
+			switch os.Args[i] {
+			case "--transcript":
+				transcriptPath = os.Args[i+1]
+			case "--cwd":
+				cwd = os.Args[i+1]
+			}
+		}
+	}
+
+	if transcriptPath == "" {
+		return fmt.Errorf("no transcript path provided (use --from-hook or --transcript <path>)")
+	}
+
+	if cwd == "" {
+		var err error
+		cwd, err = os.Getwd()
+		if err != nil {
+			cwd = "."
+		}
+	}
+
+	// Read the transcript.
+	data, err := os.ReadFile(transcriptPath)
+	if err != nil {
+		return fmt.Errorf("read transcript: %w", err)
+	}
+	transcript := string(data)
+	if strings.TrimSpace(transcript) == "" {
+		return nil // nothing to extract
+	}
+
+	// Build store config for the cwd context.
+	cfg, err := buildSessionConfig(cwd)
+	if err != nil {
+		return fmt.Errorf("build session config: %w", err)
+	}
+	s := store.New(cfg)
+
+	// Collect existing topics for deduplication.
+	existingTopics := collectExistingTopics(s)
+
+	// Configure the extractor.
+	projectName := project.DetectFromGit(cwd)
+	if projectName == "" {
+		projectName = project.Detect(cwd)
+	}
+
+	extractCfg := extract.Config{
+		Mode:        envOrDefault("MASTERMIND_EXTRACT_MODE", "keyword"),
+		LLMProvider: envOrDefault("MASTERMIND_LLM_PROVIDER", "anthropic"),
+		LLMModel:    os.Getenv("MASTERMIND_LLM_MODEL"),
+		OllamaURL:   envOrDefault("MASTERMIND_OLLAMA_URL", "http://localhost:11434"),
+		ProjectName: projectName,
+	}
+	extractor := extract.NewExtractor(extractCfg)
+
+	// Extract entries.
+	entries, err := extractor.Extract(transcript, existingTopics)
+	if err != nil {
+		return fmt.Errorf("extract: %w", err)
+	}
+
+	if len(entries) == 0 {
+		fmt.Fprintf(os.Stderr, "mastermind extract: no entries extracted\n")
+		return nil
+	}
+
+	// Write each entry to pending/.
+	var written int
+	for i := range entries {
+		// Assign scope: project-shared if project store is configured,
+		// otherwise user-personal.
+		if cfg.ProjectSharedRoot != "" {
+			entries[i].Metadata.Scope = format.ScopeProjectShared
+		} else {
+			entries[i].Metadata.Scope = format.ScopeUserPersonal
+		}
+
+		if _, err := s.Write(&entries[i]); err != nil {
+			fmt.Fprintf(os.Stderr, "mastermind extract: write failed for %q: %v\n", entries[i].Metadata.Topic, err)
+			continue
+		}
+		written++
+	}
+
+	fmt.Fprintf(os.Stderr, "mastermind extract: %d entries written to pending/\n", written)
+	return nil
+}
+
+// collectExistingTopics gathers all topic strings from the live store
+// across all scopes. Used for deduplication during extraction.
+func collectExistingTopics(s *store.Store) []string {
+	var topics []string
+	for _, scope := range format.AllScopes() {
+		refs, err := s.ListLive(scope)
+		if err != nil {
+			continue
+		}
+		for _, ref := range refs {
+			topics = append(topics, ref.Metadata.Topic)
+		}
+	}
+	return topics
+}
+
+// envOrDefault returns the environment variable value or a default.
+func envOrDefault(key, defaultVal string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return defaultVal
 }
 
 // sortByDateDesc sorts entry refs by date descending (newest first).

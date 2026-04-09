@@ -1,0 +1,165 @@
+package extract
+
+import (
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/jeanfbrito/mastermind/internal/format"
+)
+
+// KeywordExtractor scans transcripts for patterns that indicate
+// extractable knowledge: bug fixes, lessons, decisions, open loops.
+// Zero dependencies — uses only stdlib regex.
+type KeywordExtractor struct {
+	ProjectName string
+}
+
+// pattern associates a regex with the kind of entry it indicates.
+type pattern struct {
+	re   *regexp.Regexp
+	kind format.Kind
+}
+
+// patterns are compiled once and reused across extractions. Each
+// pattern matches a signal phrase that commonly appears when someone
+// discovers, decides, or resolves something.
+var patterns = []pattern{
+	// Lessons and fixes
+	{re: regexp.MustCompile(`(?i)(?:the (?:fix|solution|answer) was|solved by|the trick is|fixed it by)`), kind: format.KindLesson},
+	{re: regexp.MustCompile(`(?i)(?:root cause|the real (?:issue|problem) was|turned out to be|the actual reason)`), kind: format.KindLesson},
+	{re: regexp.MustCompile(`(?i)(?:lesson learned|key takeaway|next time|note to self|remember to)`), kind: format.KindLesson},
+
+	// War stories
+	{re: regexp.MustCompile(`(?i)(?:wasted (?:time|hours)|hours debugging|painful|nightmare|kept failing|going in circles)`), kind: format.KindWarStory},
+
+	// Decisions
+	{re: regexp.MustCompile(`(?i)(?:decided to|decision:|we chose|the tradeoff|chose .+ over .+|went with)`), kind: format.KindDecision},
+
+	// Patterns
+	{re: regexp.MustCompile(`(?i)(?:the pattern is|always do|never do|rule:|best practice|the right way to)`), kind: format.KindPattern},
+
+	// Open loops
+	{re: regexp.MustCompile(`(?i)(?:TODO:|we should|need to .+ later|open loop|come back to|still need to|haven't .+ yet)`), kind: format.KindOpenLoop},
+
+	// Insights
+	{re: regexp.MustCompile(`(?i)(?:realized that|discovered that|turns out|interesting(?:ly)?:|surprisingly|non-obvious)`), kind: format.KindInsight},
+}
+
+// Extract scans the transcript for pattern matches, groups surrounding
+// context into entries, and deduplicates against existing topics.
+func (k *KeywordExtractor) Extract(transcript string, existingTopics []string) ([]format.Entry, error) {
+	if strings.TrimSpace(transcript) == "" {
+		return nil, nil
+	}
+
+	lines := strings.Split(transcript, "\n")
+	var entries []format.Entry
+	seen := make(map[string]bool)
+
+	// Also track existing topics for dedup.
+	existingLower := make(map[string]bool)
+	for _, t := range existingTopics {
+		existingLower[strings.ToLower(t)] = true
+	}
+
+	for _, pat := range patterns {
+		for i, line := range lines {
+			if !pat.re.MatchString(line) {
+				continue
+			}
+
+			// Extract context: 3 lines before and 5 lines after the match.
+			start := i - 3
+			if start < 0 {
+				start = 0
+			}
+			end := i + 6
+			if end > len(lines) {
+				end = len(lines)
+			}
+			context := strings.Join(lines[start:end], "\n")
+
+			// Derive topic from the matched line. Clean up prefixes.
+			topic := deriveTopic(line)
+			if topic == "" {
+				continue
+			}
+
+			// Dedup: skip if we've already extracted this topic or
+			// if it closely matches an existing entry.
+			topicKey := strings.ToLower(topic)
+			if seen[topicKey] {
+				continue
+			}
+			if isDuplicate(topicKey, existingLower) {
+				continue
+			}
+			seen[topicKey] = true
+
+			project := k.ProjectName
+			if project == "" {
+				project = "general"
+			}
+
+			entries = append(entries, format.Entry{
+				Metadata: format.Metadata{
+					Date:       time.Now().UTC().Format("2006-01-02"),
+					Project:    project,
+					Topic:      topic,
+					Kind:       pat.kind,
+					Confidence: format.ConfidenceMedium,
+				},
+				Body: strings.TrimSpace(context),
+			})
+		}
+	}
+
+	return entries, nil
+}
+
+// deriveTopic extracts a topic string from the matched line.
+// Strips common prefixes, trims whitespace, and caps length.
+func deriveTopic(line string) string {
+	// Remove common assistant/user prefixes from transcript formats.
+	line = strings.TrimSpace(line)
+
+	// Remove markdown formatting.
+	line = strings.TrimLeft(line, "#*->• ")
+
+	// Remove JSON-ish prefixes that might appear in structured transcripts.
+	for _, prefix := range []string{"\"content\":", "\"text\":", "assistant:", "user:"} {
+		if idx := strings.Index(strings.ToLower(line), prefix); idx >= 0 {
+			line = line[idx+len(prefix):]
+		}
+	}
+
+	line = strings.TrimSpace(line)
+	line = strings.Trim(line, "\"',.")
+
+	if len(line) < 10 {
+		return ""
+	}
+	if len(line) > 120 {
+		// Truncate at word boundary.
+		if idx := strings.LastIndex(line[:120], " "); idx > 60 {
+			line = line[:idx]
+		} else {
+			line = line[:120]
+		}
+	}
+
+	return line
+}
+
+// isDuplicate checks if a topic closely matches any existing topic.
+// Uses simple substring containment — if either contains the other,
+// it's considered a duplicate.
+func isDuplicate(topicLower string, existing map[string]bool) bool {
+	for ex := range existing {
+		if strings.Contains(topicLower, ex) || strings.Contains(ex, topicLower) {
+			return true
+		}
+	}
+	return false
+}
