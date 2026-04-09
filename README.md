@@ -102,4 +102,4 @@ By default, mastermind is zero-dependency (keyword extraction, stdlib Go). Optio
 
 ## Status
 
-**Actively dogfooding.** 110 tests across 7 packages. All four MCP tools functional, four Claude Code hooks wired (SessionStart, PreCompact, PostToolUse, MCP server). ~35 real entries across personal and 3 project stores. See [docs/](docs/) for the full specification.
+All four MCP tools functional. Four Claude Code hooks wired (SessionStart, PreCompact, PostToolUse, MCP server). See [docs/](docs/) for the full specification.
