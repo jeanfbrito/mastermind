@@ -39,6 +39,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/jeanfbrito/mastermind/internal/format"
 	"github.com/jeanfbrito/mastermind/internal/store"
@@ -199,6 +200,10 @@ func (k *KeywordSearcher) Search(q Query) ([]Result, error) {
 		if score <= 0 {
 			continue
 		}
+		// Access frequency boost: frequently useful entries rank
+		// slightly higher. Capped at +0.5 so it's a tiebreaker,
+		// never overrides topic relevance (2.0 per token).
+		score += accessBoost(r.Metadata.Accessed)
 		results = append(results, Result{
 			Ref:      r,
 			Score:    score,
@@ -237,6 +242,13 @@ func (k *KeywordSearcher) Search(q Query) ([]Result, error) {
 				results[i].Body = entry.Body
 			}
 		}
+	}
+
+	// Track access counts for returned results. Best-effort —
+	// errors are silently discarded by IncrementAccess.
+	now := time.Now()
+	for _, r := range results {
+		k.Store.IncrementAccess(r.Ref.Path, now)
 	}
 
 	return results, nil
@@ -345,6 +357,22 @@ func scoreBody(body string, tokens []string) float64 {
 		score += contribution
 	}
 	return score
+}
+
+// accessBoost returns a small score bonus based on how many times an
+// entry has been returned by previous searches. The bonus uses
+// diminishing returns: 1 access = 0.05, 10 = 0.5 (cap). This ensures
+// frequently useful entries float up slightly without ever overriding
+// topic relevance (2.0 per token).
+func accessBoost(accessed int) float64 {
+	if accessed <= 0 {
+		return 0
+	}
+	boost := float64(accessed) * 0.05
+	if boost > 0.5 {
+		return 0.5
+	}
+	return boost
 }
 
 // tokenize splits a query string into lowercase tokens. Tokens are

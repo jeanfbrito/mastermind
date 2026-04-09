@@ -470,6 +470,29 @@ func (s *Store) WriteLive(entry *format.Entry) (string, error) {
 	return target, nil
 }
 
+// IncrementAccess bumps the accessed counter and updates last_accessed
+// for the entry at the given path. Best-effort: errors are silently
+// discarded because access tracking is a nice-to-have, not a
+// correctness requirement. The caller should never block on this.
+func (s *Store) IncrementAccess(path string, now time.Time) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	entry, err := format.Parse(data)
+	if err != nil {
+		return
+	}
+	entry.Metadata.Accessed++
+	entry.Metadata.LastAccessed = now.UTC().Format("2006-01-02")
+
+	out, err := entry.MarshalMarkdown()
+	if err != nil {
+		return
+	}
+	_ = writeFileAtomic(path, out)
+}
+
 // CloseLoop moves an open-loop entry to <scope>/resolved-loops/ so it
 // stops appearing in session-start injections. If resolution is non-empty,
 // it's appended to the entry body before moving.

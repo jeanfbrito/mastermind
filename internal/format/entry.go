@@ -51,7 +51,9 @@ type Metadata struct {
 	Kind       Kind       `yaml:"kind"`                 // enum: lesson, insight, war-story, decision, pattern, open-loop
 	Scope      Scope      `yaml:"scope,omitempty"`      // enum: user-personal, project-shared, project-personal
 	Category   string     `yaml:"category,omitempty"`   // topic directory path, max 2 segments (e.g. "electron/ipc")
-	Confidence Confidence `yaml:"confidence,omitempty"` // enum: high, medium, low (default: high)
+	Confidence   Confidence `yaml:"confidence,omitempty"`    // enum: high, medium, low (default: high)
+	Accessed     int        `yaml:"accessed,omitempty"`      // how many times returned by mm_search
+	LastAccessed string     `yaml:"last_accessed,omitempty"` // ISO 8601 date of last search hit
 }
 
 // Kind classifies an entry. See docs/FORMAT.md for the meaning of each.
