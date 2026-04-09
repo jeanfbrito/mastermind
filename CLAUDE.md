@@ -12,17 +12,17 @@ This is NOT a general-purpose memory tool. For that, use [engram](https://github
 
 ## Status
 
-**Phase 1 complete.** 7 commits on `main`, 91 tests passing across 6 Go packages, binary builds and runs.
+**Phases 1-3 largely complete.** 110 tests passing across 7 Go packages, binary builds and runs. Actively dogfooding.
 
-Git log (most recent first):
+Recent git log (most recent first):
 ```
-6f43542 Phase 1: internal/mcp + main wire-up — MCP server ships
-cffd7b1 Phase 1: internal/search — stdlib keyword search with topic-dominant ranking
-0fc03ba Phase 1: internal/project + internal/store
-9c38d50 Phase 1: internal/format — frontmatter parser, validator, marshaler
-8367fdf Add tagline
-aa9f62d Phase 0 synthesis: reference notes, continuity layer, SDK decision
-a3bd453 Initial commit: design docs and Go scaffold
+9036036 Add project knowledge entries from intelligence features session
+9fdb806 Add PreCompact extraction pipeline with keyword + LLM backends
+f3b09c3 Add access frequency scoring to search ranking
+50b7f77 Implement mm_close_loop — resolve open loops to archived state
+48f4c5c Implement session-start hook + auto-init .knowledge/
+cd51cfc Rename .mm to .knowledge + smart topic directories
+4ccc5b5 Reverse auto-expire + mm_write goes directly to live store
 ```
 
 ## Read these in order before changing anything
@@ -74,8 +74,9 @@ cmd/mastermind/main.go          entry point; version flag, subcommand dispatch, 
 internal/format/                entry schema, frontmatter parse/validate/marshal
 internal/store/                 three-scope markdown storage; pending invariant enforced at type level
 internal/project/               project name detection (git remote → git root → cwd basename)
-internal/search/                stdlib keyword search + topic-dominant ranking + context-mode-friendly markdown output
+internal/search/                stdlib keyword search + topic-dominant ranking + access frequency scoring
 internal/mcp/                   MCP SDK wiring; the ONLY importer of modelcontextprotocol/go-sdk
+internal/extract/               knowledge extraction from transcripts (keyword + optional LLM backends)
 docs/                           design spec (read CONTINUITY.md first)
 ```
 
@@ -92,7 +93,7 @@ make tidy         # go mod tidy
 make install      # copies bin/mastermind to ~/.local/bin/ (verify first)
 ```
 
-**Always run `make test` and `make vet` before committing.** 91 tests is the Phase 1 baseline; if a commit lands with fewer, something got silently broken.
+**Always run `make test` and `make vet` before committing.** 110 tests is the current baseline across 7 packages; if a commit lands with fewer, something got silently broken.
 
 ## Git discipline (this repo specifically)
 
@@ -101,22 +102,33 @@ make install      # copies bin/mastermind to ~/.local/bin/ (verify first)
 - Read operations (`git status`, `git diff`, `git log`) are always fine.
 - Before any write operation, confirm the working tree state.
 
-## What Phase 2 starts with (the next real work)
+## Current status
 
-1. **Small doc cleanup**: update DECISIONS.md to record the Go minimum bump (1.22 → 1.25, forced by the MCP SDK) and confirm the Phase 1 test-count baseline (91 tests across 6 packages).
-2. **`mastermind mcp` end-to-end smoke test against a real Claude Code session.** Add mastermind to the Claude Code MCP config (see the help text from `./bin/mastermind --help` for the JSON snippet), restart Claude Code, call `mm_search` from inside a session with the `~/Github/mastermind` directory as cwd, verify it returns correctly formatted results.
-3. **Initialize `~/.knowledge/` as a real git repo with a private remote.** Hand-write 3-5 real lessons in the FORMAT.md schema from actual engineering experience. **This is the single most important moment in the project** — it's the first contact between the locked format and real knowledge. If an entry reveals the format is wrong, fix it now before there are more than 5 entries to migrate.
-4. **Query the seed entries with `mm_search`.** Confirm the markdown output is readable, ranking is sensible, and `[scope]` tags appear correctly in results.
-5. **Only after 1-4 work**: `/mm-init` warmup and the project-shared store (`<repo>/.knowledge/`) on a real repo.
+**Phase 2 complete. Phase 3 (extraction) largely complete. Dogfooding in progress.**
 
-Phase 3 (capture hooks + review flow) comes after Phase 2 stabilizes. Don't start Phase 3 until Phase 2 has been dogfooded for at least a few days.
+What's working:
+- All four MCP tools functional: `mm_search`, `mm_write`, `mm_promote`, `mm_close_loop`
+- **SessionStart hook** auto-injects open loops + project knowledge at session start
+- **PreCompact hook** auto-extracts knowledge from transcripts before context compression
+- **Auto-init** creates `.knowledge/` in git repos on first use (opt out: `MASTERMIND_NO_AUTO_INIT=1`)
+- **Access frequency scoring** — entries returned by mm_search track access counts, frequently useful entries rank higher
+- **LLM extraction** (optional) — set `MASTERMIND_EXTRACT_MODE=llm` for Haiku/Ollama-powered extraction
+- **`/mm-extract` skill** — manual extraction command for end-of-session capture
+- ~35 real entries across `~/.knowledge/` and 3 project stores
 
-## Self-critique notes from Phase 1 (worth remembering)
+What's next:
+1. **`.knowledge/` git strategy** — decide what gets committed vs gitignored (`.personal/`, `resolved-loops/`)
+2. **Tests for `internal/extract/`** — keyword extractor has real logic that should be locked down
+3. **PostToolUse proactive search** (Feature 3) — surface relevant knowledge after Read/Edit/Write calls. Deferred until PreCompact extraction is dogfooded.
+4. **`/mm-review` skill** — review pending entries from auto-extraction (promote/reject)
+5. **Phase 4 (archive tier)** and **Phase 5 (sync)** per ROADMAP.md
 
-- **`mm_close_loop` is a stub.** Registered so agents learn it exists, but the handler returns "not implemented, see Phase 3c." If an agent tries to resolve a loop, it gets a clear error. Expected through Phase 3c.
+## Known limitations (worth remembering)
+
 - **`PruneStale` errors are silently discarded** in `main.go` per the silent-unless-needed rule. Phase 6 should add a structured log at `~/.knowledge/logs/mastermind.log` with one line per prune error, still silent to the user but inspectable.
-- **`main.go` has no tests.** Subcommand dispatch is trivial enough to survive without them for now, but a `TestMainDispatch` would be cheap to add later.
-- **`session-start` and `session-close` subcommands are stubs** with Phase 3 pointers. They'll be written alongside the extraction pipeline in Phase 3.
+- **`session-close` subcommand is still a stub.** PreCompact hook handles most of the extraction use case, but session-close could be useful for final cleanup.
+- **`internal/extract/` has no tests.** The keyword extractor has real regex logic and dedup that should be locked down with tests.
+- **Access tracking is synchronous** in search. Adds ~50ms for 10 results. Acceptable for current corpus sizes but worth monitoring.
 
 ## When you get stuck
 
