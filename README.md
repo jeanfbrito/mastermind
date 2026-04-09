@@ -54,28 +54,52 @@ Archive is triggered manually via `/mm-archive <project>` when you leave a proje
 
 ## Capture
 
-Capture is the hard problem. mastermind solves it via explicit `/mm-extract` at session end:
+Capture happens automatically via Claude Code hooks — no commands to remember:
 
-1. You run `/mm-extract` after a session where you learned something.
-2. Tool reads the transcript, proposes candidate entries in the mastermind format, and suggests a scope for each.
-3. Candidates land in `<scope>/pending/`.
-4. You review with git diff, edit, accept, reject.
-5. Commit.
+- **PreCompact hook**: before context compression, mastermind reads the transcript and extracts lessons/decisions/patterns into `<scope>/pending/` for review.
+- **`/mm-extract` skill**: manual fallback — run at session end to capture anything the hook missed.
+- **`mm_write` MCP tool**: agent writes knowledge directly to the live store when you ask it to save something mid-session.
 
-No auto-writes. No background extraction. Review is the consolidation.
+Auto-extracted entries land in `pending/`. User-initiated writes (`mm_write`) go straight to the live store — the user IS the review.
+
+## Retrieval
+
+Retrieval is also automatic:
+
+- **SessionStart hook**: injects open loops + project knowledge into the agent's context at session start.
+- **PostToolUse hook**: when the agent reads/edits a file, mastermind nudges it if relevant knowledge exists ("mastermind has 4 entries about electron — consider mm_search").
+- **`mm_search` MCP tool**: keyword search across all three scopes, ranked by topic relevance + access frequency. Agents call this proactively.
+- **Access frequency scoring**: entries returned by mm_search track access counts — frequently useful entries rank higher over time.
 
 ## Format
 
 Every entry is a markdown file with frontmatter. See [docs/FORMAT.md](docs/FORMAT.md) — this is the most important file in the project and must stay stable.
 
+## MCP tools
+
+Four tools, forever. Adding a fifth requires a DECISIONS.md entry.
+
+| Tool | Purpose |
+|------|---------|
+| `mm_search` | Search knowledge across all scopes |
+| `mm_write` | Write an entry to the live store (user-initiated) |
+| `mm_promote` | Move a pending entry to the live store (after review) |
+| `mm_close_loop` | Resolve an open-loop → archived to `resolved-loops/` |
+
 ## Non-goals
 
 - No server. No hub. No account.
-- No vector store, no embeddings, no fine-tuning. FTS5 over plain markdown is enough.
-- No replacement for context-mode. mastermind is a consumer of context-mode's index.
+- No vector store, no embeddings, no fine-tuning. Keyword search over plain markdown is enough.
+- No replacement for context-mode. mastermind stacks with it automatically (context-mode indexes mm_search output into its FTS5 cache for warm follow-ups).
 - No saving code, file paths, or reconstructible information. Only insights, lessons, decisions, patterns.
-- No automatic writes without review.
+
+## Optional intelligence
+
+By default, mastermind is zero-dependency (keyword extraction, stdlib Go). Optionally, set `MASTERMIND_EXTRACT_MODE=llm` to use a language model for smarter extraction:
+
+- **Anthropic API** (default): uses Haiku via your existing `ANTHROPIC_API_KEY`. ~$0.001 per extraction.
+- **Ollama** (local): set `MASTERMIND_LLM_PROVIDER=ollama` for fully local extraction with no API calls.
 
 ## Status
 
-Design phase. See [docs/](docs/) for the full specification.
+**Actively dogfooding.** 110 tests across 7 packages. All four MCP tools functional, four Claude Code hooks wired (SessionStart, PreCompact, PostToolUse, MCP server). ~35 real entries across personal and 3 project stores. See [docs/](docs/) for the full specification.
