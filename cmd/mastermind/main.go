@@ -27,6 +27,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/jeanfbrito/mastermind/internal/extract"
 	"github.com/jeanfbrito/mastermind/internal/format"
@@ -72,6 +73,12 @@ func main() {
 		case "extract":
 			if err := runExtract(); err != nil {
 				fmt.Fprintf(os.Stderr, "mastermind extract: %s\n", err)
+				os.Exit(1)
+			}
+			return
+		case "suggest":
+			if err := runSuggest(); err != nil {
+				fmt.Fprintf(os.Stderr, "mastermind suggest: %s\n", err)
 				os.Exit(1)
 			}
 			return
@@ -524,6 +531,170 @@ func envOrDefault(key, defaultVal string) string {
 		return v
 	}
 	return defaultVal
+}
+
+// ─── suggest subcommand ────────────────────────────────────────────────
+
+// suggestHookInput is the JSON structure Claude Code sends to PostToolUse hooks.
+type suggestHookInput struct {
+	ToolName  string          `json:"tool_name"`
+	ToolInput json.RawMessage `json:"tool_input"`
+	Cwd       string          `json:"cwd"`
+	SessionID string          `json:"session_id"`
+}
+
+// suggestToolInput extracts file_path from the tool_input JSON.
+type suggestToolInput struct {
+	FilePath string `json:"file_path"`
+}
+
+// skipSegments are directory names too generic to match against topic dirs.
+var skipSegments = map[string]bool{
+	"internal": true, "src": true, "lib": true, "pkg": true,
+	"cmd": true, "app": true, "test": true, "tests": true,
+	"spec": true, "specs": true, "build": true, "dist": true,
+	"node_modules": true, "vendor": true, "components": true,
+	"utils": true, "helpers": true, "common": true, "shared": true,
+	"main": true, "index": true, "types": true, "models": true,
+}
+
+// runSuggest implements the suggest subcommand. It reads PostToolUse
+// hook input from stdin, checks if mastermind has knowledge about the
+// file being touched, and outputs a one-line nudge if so.
+//
+// Design: directory stat, not search. Checks if topic directories
+// matching the file path exist in any .knowledge/ scope. If yes,
+// counts entries and outputs a nudge. If no, outputs nothing.
+// Executes in <10ms.
+func runSuggest() error {
+	var input suggestHookInput
+	if err := json.NewDecoder(os.Stdin).Decode(&input); err != nil {
+		return nil // silent on bad input — don't block the agent
+	}
+
+	var toolInput suggestToolInput
+	if err := json.Unmarshal(input.ToolInput, &toolInput); err != nil || toolInput.FilePath == "" {
+		return nil // no file path — nothing to suggest
+	}
+
+	// Extract keywords from the file path.
+	keywords := extractPathKeywords(toolInput.FilePath)
+	if len(keywords) == 0 {
+		return nil
+	}
+
+	// Build store config to find scope roots.
+	cwd := input.Cwd
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
+	cfg, err := buildSessionConfig(cwd)
+	if err != nil {
+		return nil
+	}
+
+	// Check each keyword against topic dirs in all scope roots.
+	roots := []string{cfg.UserPersonalRoot, cfg.ProjectSharedRoot, cfg.ProjectPersonalRoot}
+
+	type topicMatch struct {
+		topic string
+		count int
+	}
+	var matches []topicMatch
+	seen := make(map[string]bool)
+
+	for _, kw := range keywords {
+		if seen[kw] {
+			continue
+		}
+		seen[kw] = true
+
+		total := 0
+		for _, root := range roots {
+			if root == "" {
+				continue
+			}
+			total += countEntriesInDir(filepath.Join(root, kw))
+		}
+		if total > 0 {
+			matches = append(matches, topicMatch{topic: kw, count: total})
+		}
+	}
+
+	if len(matches) == 0 {
+		return nil
+	}
+
+	// Debounce: skip if we suggested the same topics recently.
+	debounceFile := filepath.Join(os.TempDir(), "mastermind-suggest-debounce")
+	debounceKey := matches[0].topic
+	if data, err := os.ReadFile(debounceFile); err == nil {
+		parts := strings.SplitN(string(data), "|", 2)
+		if len(parts) == 2 && parts[1] == debounceKey {
+			if ts, err := time.Parse(time.RFC3339, parts[0]); err == nil {
+				if time.Since(ts) < 60*time.Second {
+					return nil // debounced
+				}
+			}
+		}
+	}
+	_ = os.WriteFile(debounceFile, []byte(time.Now().Format(time.RFC3339)+"|"+debounceKey), 0o644)
+
+	// Format one-line nudge.
+	var parts []string
+	for _, m := range matches {
+		if len(parts) >= 3 {
+			break
+		}
+		parts = append(parts, fmt.Sprintf("%q (%d entries)", m.topic, m.count))
+	}
+
+	fmt.Printf("_mastermind has knowledge about %s — consider mm_search._\n", strings.Join(parts, ", "))
+	return nil
+}
+
+// extractPathKeywords pulls meaningful keywords from a file path.
+// Skips generic directory names and returns lowercase segments.
+func extractPathKeywords(filePath string) []string {
+	// Take the last 4 segments of the path (dirs + filename).
+	parts := strings.Split(filepath.Clean(filePath), string(filepath.Separator))
+	if len(parts) > 4 {
+		parts = parts[len(parts)-4:]
+	}
+
+	var keywords []string
+	for _, p := range parts {
+		// Strip file extension for the filename.
+		if ext := filepath.Ext(p); ext != "" {
+			p = strings.TrimSuffix(p, ext)
+		}
+		p = strings.ToLower(p)
+		if p == "" || skipSegments[p] || len(p) < 2 {
+			continue
+		}
+		keywords = append(keywords, p)
+	}
+	return keywords
+}
+
+// countEntriesInDir counts .md files in a directory and its subdirs.
+// Returns 0 if the directory doesn't exist.
+func countEntriesInDir(dir string) int {
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		return 0
+	}
+	count := 0
+	filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if !d.IsDir() && strings.HasSuffix(d.Name(), ".md") {
+			count++
+		}
+		return nil
+	})
+	return count
 }
 
 // sortByDateDesc sorts entry refs by date descending (newest first).
