@@ -470,6 +470,73 @@ func (s *Store) WriteLive(entry *format.Entry) (string, error) {
 	return target, nil
 }
 
+// CloseLoop moves an open-loop entry to <scope>/resolved-loops/ so it
+// stops appearing in session-start injections. If resolution is non-empty,
+// it's appended to the entry body before moving.
+//
+// The entry can live anywhere under a configured scope — live directory,
+// pending directory, or topic subdirectory. CloseLoop verifies the entry
+// is kind=open-loop before acting.
+//
+// Resolved loops are never deleted — they're archived for history. The
+// resolved-loops/ directory is skipped by ListLive (it's in operationalDirs)
+// so resolved entries don't pollute search results.
+func (s *Store) CloseLoop(entryPath string, resolution string) (string, error) {
+	abs, err := filepath.Abs(entryPath)
+	if err != nil {
+		return "", fmt.Errorf("store: abs %s: %w", entryPath, err)
+	}
+
+	scope, root := s.scopeOfPath(abs)
+	if scope == scopeUnknown {
+		return "", fmt.Errorf("%w: path not under any configured scope: %s", ErrInvalidScope, abs)
+	}
+
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		return "", fmt.Errorf("store: read %s: %w", abs, err)
+	}
+	entry, err := format.Parse(data)
+	if err != nil {
+		return "", fmt.Errorf("store: parse %s: %w", abs, err)
+	}
+
+	if entry.Metadata.Kind != format.KindOpenLoop {
+		return "", fmt.Errorf("store: close-loop: entry is kind %q, not open-loop", entry.Metadata.Kind)
+	}
+
+	if resolution != "" {
+		if entry.Body != "" {
+			entry.Body = entry.Body + "\n\n## Resolution\n\n" + resolution + "\n"
+		} else {
+			entry.Body = "## Resolution\n\n" + resolution + "\n"
+		}
+	}
+
+	resolvedDir := filepath.Join(root, "resolved-loops")
+	if err := os.MkdirAll(resolvedDir, 0o755); err != nil {
+		return "", fmt.Errorf("store: mkdir resolved-loops: %w", err)
+	}
+
+	name := liveFileName(entry.Metadata.Topic)
+	target := filepath.Join(resolvedDir, name)
+
+	outData, err := entry.MarshalMarkdown()
+	if err != nil {
+		return "", fmt.Errorf("store: marshal entry: %w", err)
+	}
+
+	if err := writeFileAtomic(target, outData); err != nil {
+		return "", fmt.Errorf("store: atomic write %s: %w", target, err)
+	}
+
+	// Remove the original. Best-effort — if this fails, the entry
+	// exists in both places, which is the safe side to fail on.
+	_ = os.Remove(abs)
+
+	return target, nil
+}
+
 // ─── topic directory resolution ────────────────────────────────────────
 
 // resolveTopicDir determines the topic directory for an entry based on

@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -335,21 +336,93 @@ func TestHandlePromoteInvalidPath(t *testing.T) {
 	}
 }
 
-// ─── mm_close_loop handler (Phase 1 stub) ──────────────────────────────
+// ─── mm_close_loop handler ──────────────────────────────────────────────
 
-func TestHandleCloseLoopNotImplemented(t *testing.T) {
-	srv, _ := newTestServer(t)
-	_, _, err := srv.handleCloseLoop(context.Background(), nil, CloseLoopInput{
-		PendingPath: "/some/path/to/loop.md",
+func TestHandleCloseLoopEndToEnd(t *testing.T) {
+	srv, s := newTestServer(t)
+
+	// Write an open-loop entry to the live store.
+	entry := &format.Entry{
+		Metadata: format.Metadata{
+			Date:    "2026-04-09",
+			Topic:   "finish auth refactor",
+			Kind:    format.KindOpenLoop,
+			Scope:   format.ScopeUserPersonal,
+			Project: "mastermind",
+		},
+		Body: "Started refactoring auth middleware.",
+	}
+	livePath, err := s.WriteLive(entry)
+	if err != nil {
+		t.Fatalf("WriteLive: %v", err)
+	}
+
+	// Close the loop with a resolution.
+	_, out, err := srv.handleCloseLoop(context.Background(), nil, CloseLoopInput{
+		PendingPath: livePath,
+		Resolution:  "Refactor complete, merged in PR #42.",
+	})
+	if err != nil {
+		t.Fatalf("handleCloseLoop: %v", err)
+	}
+	if out.ResolvedPath == "" {
+		t.Fatal("expected non-empty resolved path")
+	}
+	if !strings.Contains(out.ResolvedPath, "resolved-loops") {
+		t.Errorf("resolved path should contain resolved-loops/; got: %s", out.ResolvedPath)
+	}
+
+	// Original file should be gone.
+	if _, err := os.Stat(livePath); !os.IsNotExist(err) {
+		t.Errorf("original file should be removed; stat err: %v", err)
+	}
+
+	// Resolved file should exist and contain the resolution.
+	data, err := os.ReadFile(out.ResolvedPath)
+	if err != nil {
+		t.Fatalf("read resolved: %v", err)
+	}
+	if !strings.Contains(string(data), "Refactor complete") {
+		t.Error("resolved file should contain the resolution text")
+	}
+}
+
+func TestHandleCloseLoopRejectsNonOpenLoop(t *testing.T) {
+	srv, s := newTestServer(t)
+
+	entry := &format.Entry{
+		Metadata: format.Metadata{
+			Date:    "2026-04-09",
+			Topic:   "a lesson not a loop",
+			Kind:    format.KindLesson,
+			Scope:   format.ScopeUserPersonal,
+			Project: "general",
+		},
+		Body: "This is a lesson.",
+	}
+	livePath, err := s.WriteLive(entry)
+	if err != nil {
+		t.Fatalf("WriteLive: %v", err)
+	}
+
+	_, _, err = srv.handleCloseLoop(context.Background(), nil, CloseLoopInput{
+		PendingPath: livePath,
 	})
 	if err == nil {
-		t.Error("Phase 1 mm_close_loop should return 'not implemented' error")
+		t.Error("expected error for non-open-loop entry")
 	}
-	if !strings.Contains(err.Error(), "not implemented") {
-		t.Errorf("error should mention 'not implemented'; got: %v", err)
+	if !strings.Contains(err.Error(), "not open-loop") {
+		t.Errorf("error should mention 'not open-loop'; got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "Phase 3") {
-		t.Errorf("error should reference Phase 3 in the roadmap; got: %v", err)
+}
+
+func TestHandleCloseLoopBogusPath(t *testing.T) {
+	srv, _ := newTestServer(t)
+	_, _, err := srv.handleCloseLoop(context.Background(), nil, CloseLoopInput{
+		PendingPath: "/nonexistent/path/to/loop.md",
+	})
+	if err == nil {
+		t.Error("expected error for bogus path")
 	}
 }
 

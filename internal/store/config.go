@@ -142,8 +142,9 @@ func (c Config) rootFor(s scopeKind) string {
 // operationalDirs are subdirectories that are NOT topic directories.
 // resolveTopicDir and ListLive skip these when scanning for topics.
 var operationalDirs = map[string]bool{
-	"pending": true,
-	"archive": true,
+	"pending":        true,
+	"archive":        true,
+	"resolved-loops": true,
 }
 
 // pendingDir is "pending" for every scope. Consistency matters more

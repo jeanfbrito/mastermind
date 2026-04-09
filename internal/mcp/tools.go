@@ -205,18 +205,9 @@ type CloseLoopOutput struct {
 }
 
 func (s *Server) handleCloseLoop(ctx context.Context, req *mcpsdk.CallToolRequest, in CloseLoopInput) (*mcpsdk.CallToolResult, CloseLoopOutput, error) {
-	// mm_close_loop is intentionally a thin wrapper. The real behavior
-	// (verify it's an open-loop, append resolution note, move to
-	// resolved-loops/) lives in a store.CloseLoop method that doesn't
-	// exist yet — that's Phase 3c territory (CONTINUITY.md → open-loop
-	// management).
-	//
-	// For Phase 1, we register the tool so the schema is published and
-	// the agent learns about it from serverInstructions, but the handler
-	// returns an explicit "not implemented" error. That's better than
-	// silently dropping calls: the agent learns the tool exists, tries
-	// it, gets a clear error, and the user sees the Phase 3c work is
-	// still pending.
-	_ = in
-	return nil, CloseLoopOutput{}, fmt.Errorf("mm_close_loop: not implemented in Phase 1 — see docs/CONTINUITY.md and docs/ROADMAP.md Phase 3c")
+	resolvedPath, err := s.opts.Store.CloseLoop(in.PendingPath, in.Resolution)
+	if err != nil {
+		return nil, CloseLoopOutput{}, err
+	}
+	return nil, CloseLoopOutput{ResolvedPath: resolvedPath}, nil
 }
