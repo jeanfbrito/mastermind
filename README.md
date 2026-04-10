@@ -1,10 +1,10 @@
 # mastermind
 
-> *Persistent memory for AI coding agents — survives sessions, projects, and years.*
+> Persistent memory for AI coding agents — survives sessions, projects, and years.
 
-mastermind is a personal engineering knowledge base that gives your AI agent long-term memory. It captures lessons, decisions, patterns, and war stories from your coding sessions and surfaces them automatically when they're relevant — so you never re-debug the same bug or re-make the same decision.
+mastermind gives your AI coding agent long-term memory. It captures lessons, decisions, patterns, and war stories from your sessions and surfaces them automatically when relevant — so you stop re-debugging the same bugs and re-making the same decisions.
 
-Built as an [MCP](https://modelcontextprotocol.io) server + CLI hooks for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Single Go binary, zero runtime dependencies, plain markdown storage synced with git.
+Built as an [MCP](https://modelcontextprotocol.io) server with CLI hooks for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Single Go binary, zero runtime dependencies, plain markdown files synced with git.
 
 ## How it works
 
@@ -13,39 +13,40 @@ Session starts
   → mastermind injects relevant knowledge + open loops (SessionStart hook)
 
 You work normally
-  → agent reads a file, mastermind nudges: "3 entries about electron — consider mm_search"
-  → agent finds something worth keeping, calls mm_write
+  → agent reads a file → mastermind nudges: "3 entries about electron — consider mm_search"
+  → agent discovers something worth keeping → calls mm_write
 
 Context gets compressed
-  → mastermind auto-extracts lessons from the transcript (PreCompact hook)
-  → extracted entries land in pending/ for your review
+  → mastermind extracts lessons from the conversation (PreCompact hook)
+  → extracted entries land in pending/ for review
 
 Next session
-  → cycle repeats, knowledge compounds
+  → knowledge compounds automatically
 ```
 
-No commands to remember. No dashboards. No streaks. The default state is invisible.
+No commands to remember. No dashboards. The default state is invisible.
 
 ## Install
 
 ```bash
-# From source
 go install github.com/jeanfbrito/mastermind/cmd/mastermind@latest
+```
 
-# Or build locally
+Or build from source:
+
+```bash
 git clone https://github.com/jeanfbrito/mastermind.git
 cd mastermind
-make build
-make install    # copies to ~/.local/bin/
+make build && make install
 ```
 
 Requires Go 1.25+.
 
 ## Setup
 
-### 1. Add the MCP server
+### 1. Register the MCP server
 
-Add to your Claude Code MCP config (`~/.claude/config.json`):
+Add to `~/.claude/config.json`:
 
 ```json
 {
@@ -58,9 +59,9 @@ Add to your Claude Code MCP config (`~/.claude/config.json`):
 }
 ```
 
-### 2. Add the hooks
+### 2. Configure the hooks
 
-Add to `~/.claude/settings.json` inside the `"hooks"` object:
+Add to `~/.claude/settings.json` under `"hooks"`:
 
 ```json
 {
@@ -87,39 +88,48 @@ Add to `~/.claude/settings.json` inside the `"hooks"` object:
 }
 ```
 
-### 3. Initialize your knowledge store
+### 3. Initialize the knowledge store
 
 ```bash
-mkdir ~/.knowledge
-cd ~/.knowledge && git init
+mkdir ~/.knowledge && cd ~/.knowledge && git init
 ```
 
-Project-level stores (`.knowledge/` in a repo) are created automatically on first use. Opt out with `MASTERMIND_NO_AUTO_INIT=1`.
+Project-level stores (`<repo>/.knowledge/`) are created automatically on first use. Opt out with `MASTERMIND_NO_AUTO_INIT=1`.
 
-## The three scopes
+## Knowledge scopes
 
-| Scope | Location | Synced via | Contains |
+mastermind organizes knowledge into three scopes, all searched automatically:
+
+| Scope | Location | Synced via | Use case |
 |---|---|---|---|
-| **user-personal** | `~/.knowledge/` | git remote | Cross-project lessons, general patterns |
-| **project-shared** | `<repo>/.knowledge/` | repo git | Project-specific knowledge, shareable with team |
-| **project-personal** | `~/.claude/projects/<slug>/memory/` | personal git | Private notes about a project |
+| **user-personal** | `~/.knowledge/` | personal git remote | General engineering lessons that apply across all projects |
+| **project-shared** | `<repo>/.knowledge/` | committed to repo | Project-specific knowledge shared with the team |
+| **project-personal** | `~/.claude/projects/<slug>/memory/` | personal git | Private notes about a specific project |
 
-All three are searched automatically by `mm_search`. Results are tagged by scope.
+`mm_search` fans out to all three scopes and returns source-tagged, ranked results.
 
 ## MCP tools
 
-| Tool | What it does |
+| Tool | Description |
 |------|-------------|
-| `mm_search` | Search knowledge across all scopes. Agents should call this proactively. |
-| `mm_write` | Save an entry to the live store. Use when you discover something worth keeping. |
-| `mm_promote` | Move a pending entry (from auto-extraction) to the live store after review. |
-| `mm_close_loop` | Mark an open-loop as resolved. Moves to `resolved-loops/`, stops appearing at session start. |
+| `mm_search` | Search knowledge across all scopes. Called proactively by the agent at task start. |
+| `mm_write` | Write an entry to the live store. The agent calls this when it discovers something worth preserving. |
+| `mm_promote` | Promote a pending entry (from auto-extraction) to the live store after review. |
+| `mm_close_loop` | Resolve an open loop. Archives the entry to `resolved-loops/` so it stops surfacing. |
+
+## Hooks
+
+| Hook | Trigger | Action |
+|------|---------|--------|
+| **SessionStart** | Session opens | Injects open loops and project-relevant knowledge into the agent's context |
+| **PreCompact** | Before context compression | Extracts lessons from the conversation transcript into `pending/` |
+| **PostToolUse** | After Read, Edit, or Write | Nudges the agent when relevant knowledge exists for the file being touched |
 
 ## Entry format
 
 Every entry is a markdown file with YAML frontmatter:
 
-```markdown
+```yaml
 ---
 date: 2026-04-09
 project: my-project
@@ -130,38 +140,30 @@ scope: project-shared
 category: electron/security
 confidence: high
 ---
+```
 
+```markdown
 ## What happened
-Used DOMPurify to sanitize markdown HTML output. The <details> and
-<summary> elements were silently stripped because they're not in
-DOMPurify's default allowlist.
+Used DOMPurify to sanitize markdown output. The <details> and <summary>
+elements were silently stripped — they're not in DOMPurify's default allowlist.
 
 ## Fix
 Add ALLOWED_TAGS: ['details', 'summary'] to the DOMPurify config.
 
 ## Rule
-Always check DOMPurify's default allowlist when HTML elements
-disappear after sanitization.
+Always check DOMPurify's default allowlist when HTML elements disappear.
 ```
 
-Six entry kinds: `lesson`, `insight`, `war-story`, `decision`, `pattern`, `open-loop`.
+Entry kinds: `lesson` · `insight` · `war-story` · `decision` · `pattern` · `open-loop`
 
-See [docs/FORMAT.md](docs/FORMAT.md) for the full schema — this is a long-term contract.
-
-## Claude Code hooks
-
-| Hook | When it fires | What mastermind does |
-|------|--------------|---------------------|
-| **SessionStart** | Session opens | Injects open loops + project knowledge into agent context |
-| **PreCompact** | Before context compression | Extracts lessons from transcript → `pending/` |
-| **PostToolUse** | After Read/Edit/Write | Nudges agent if knowledge exists about the file being touched |
+See [docs/FORMAT.md](docs/FORMAT.md) for the full schema.
 
 ## Optional LLM extraction
 
-By default, extraction uses keyword/regex matching (zero dependencies). For smarter extraction, enable LLM mode:
+By default, knowledge extraction uses keyword/regex matching with zero external dependencies. For higher-quality extraction, enable LLM mode:
 
 ```bash
-# Anthropic API (uses Haiku, ~$0.001 per extraction)
+# Use Anthropic API (Haiku)
 export MASTERMIND_EXTRACT_MODE=llm
 
 # Or use a local model via Ollama
@@ -169,28 +171,38 @@ export MASTERMIND_EXTRACT_MODE=llm
 export MASTERMIND_LLM_PROVIDER=ollama
 ```
 
-## Design philosophy
+## Configuration
 
-- **Invisible by default.** No notifications, no badges, no reminders. The tool works through hooks, not habits.
-- **Plain markdown + git.** No database, no embeddings, no vector store. Files on disk are the database. Git is the sync layer. A markdown file written today will still parse in 2034.
-- **Zero runtime dependencies.** Single static Go binary. No Python, no Node, no Docker, no Postgres. If the binary exists, it works.
-- **ADHD-first design.** Every feature passes the test: "does this work on a bad working-memory day?" If it requires you to remember to use it, it's the wrong design.
-- **Simplicity is a feature.** A small, focused tool surface beats a sprawling one.
+| Environment variable | Default | Description |
+|---------------------|---------|-------------|
+| `MASTERMIND_NO_AUTO_INIT` | _(unset)_ | Set to `1` to disable automatic `.knowledge/` creation in git repos |
+| `MASTERMIND_EXTRACT_MODE` | `keyword` | `keyword` for regex-based extraction, `llm` for model-powered extraction |
+| `MASTERMIND_LLM_PROVIDER` | `anthropic` | `anthropic` or `ollama` |
+| `MASTERMIND_LLM_MODEL` | _(auto)_ | Model identifier (defaults to Haiku for Anthropic, llama3.2 for Ollama) |
+| `MASTERMIND_OLLAMA_URL` | `http://localhost:11434` | Ollama API endpoint |
+
+## Design principles
+
+- **Zero friction.** Capture and retrieval happen through hooks, not commands. The tool works on autopilot — nothing to remember, nothing to maintain.
+- **Plain markdown + git.** No database. Files on disk are the store, git is the sync layer. A markdown file written today will still parse in 2034.
+- **Zero runtime dependencies.** Single static Go binary. No Python, no Node, no Docker, no Postgres.
+- **Scoped sharing.** Personal knowledge stays personal. Project knowledge lives in the repo, versioned and shareable. The boundary is explicit.
 
 ## Non-goals
 
-- No server, hub, or account
-- No vector store or embeddings — keyword search is enough for career-scale corpora
-- No saving code or file paths — only lessons, decisions, patterns, insights
-- No multi-agent coordination — this is personal memory, not shared infrastructure
+- No server, hub, or cloud account
+- No vector store or embeddings — keyword search scales to career-length corpora
+- No code or file path storage — only insights, lessons, decisions, and patterns
 
-## Docs
+## Documentation
 
-- [docs/CONTINUITY.md](docs/CONTINUITY.md) — the five load-bearing behaviors
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — package layout and MCP tool surface
-- [docs/FORMAT.md](docs/FORMAT.md) — the entry schema (long-term contract)
-- [docs/DECISIONS.md](docs/DECISIONS.md) — why every architectural choice is what it is
-- [docs/ROADMAP.md](docs/ROADMAP.md) — what's planned
+| Doc | Contents |
+|-----|----------|
+| [CONTINUITY.md](docs/CONTINUITY.md) | Core behaviors: session-start injection, extraction, open-loop lifecycle |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Package layout, MCP tool surface, hook integration |
+| [FORMAT.md](docs/FORMAT.md) | Entry schema — the long-term contract |
+| [DECISIONS.md](docs/DECISIONS.md) | Architectural decision log |
+| [ROADMAP.md](docs/ROADMAP.md) | Planned work |
 
 ## License
 
