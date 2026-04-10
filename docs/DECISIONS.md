@@ -517,6 +517,46 @@ Side benefit: the fallback path (LLM error, `Strict=false`) now returns the cach
 
 ---
 
+## 2026-04-10 — Supersedes/contradicts frontmatter fields + search co-retrieval
+
+**Decision**: Added two optional `[]string` fields to `format.Metadata` — `Supersedes` and `Contradicts` — as an additive schema extension. Both are human-populated only; mastermind does not auto-generate them. Their search-time behavior diverges by design:
+
+- **`supersedes`**: contributes to within-class score multiplier. Each listed slug adds 0.2 to a multiplier capped at 3 links (1.0× → 1.6× max). Applied in a single post-sort pass in `internal/search/search.go` before the limit trim, then results are re-sorted. Within-class only — class still dominates, the boost cannot bridge a class gap.
+
+- **`contradicts`**: does NOT contribute to the score at all. Instead, it triggers **co-retrieval**: after the top-K results are selected, any entry in that top-K with a non-empty `Contradicts` list has its listed slugs looked up in the filtered corpus and appended as additional Results with an `Annotation` field set to `contradicts "<topic>"`. Appended entries bypass the limit (they're co-retrieved because of the relationship, not because of keyword score). Capped at 3 total appended entries per query to keep the output bounded.
+
+**Implementation**: `internal/format/entry.go` (struct fields), `internal/search/search.go` (boost pass + co-retrieval helper), `internal/search/format.go` (annotation rendering on the H3 heading), `docs/FORMAT.md` (additive field documentation).
+
+**Critical divergence from shiba-memory**: shiba's `schema/007_actr_proper.sql:121` boost formula treats all six relation types identically (`* (1 + SUM(link_strengths) * 0.2)`) — `contradicts` gets the same score bump as `supports`. Mastermind rejects that semantics because it violates hard rule #7 ("knowledge is never silently overridden"): boosting a contradicting entry hides the tension behind score math instead of surfacing it. The co-retrieval pattern is stronger — the contradicting claim appears *alongside* the claim it contradicts, with an annotation that makes the relationship legible to the reader. Shiba validated the multiplier shape; mastermind applies it only to the monotonic-confidence signal (`supersedes`).
+
+**Why slugs, not paths**: Paths are volatile — moving an entry between scopes or directories would break all references. Slugs (filename minus `.md`) are stable across file moves within a scope. The `slugFromPath` helper is intentionally naive (last path component, strip `.md`) because mastermind's store generates slugs from the topic at write time and doesn't rename them post-hoc.
+
+**Dangling slug policy**: A slug in `supersedes` or `contradicts` that no longer resolves (the target entry was moved, renamed, or deleted) is silently skipped during lookup. No error, no log — consistent with the silent-unless-needed rule. Review surfaces dangling links via `/mm-review` as a visible broken reference, which is where human triage belongs. Cascading deletion (shiba's `ON DELETE CASCADE`) is explicitly rejected because it violates hard rule #7.
+
+**What was deferred**:
+
+- **`/mm-review` integration**: the skill is a markdown prompt file (`~/.claude/skills/mm-review.md`), not a Go subcommand. Populating supersedes/contradicts from the skill is a follow-up in a separate session. The frontmatter + search behavior land here; the review-side prompting can iterate independently without breaking anything.
+- **PageRank-style importance boost** (separate open loop): depends on the relations schema existing. Now unblocked and ready for its own implementation pass when Jean is ready. Mastermind's boost is currently linear in link count; PageRank would propagate importance through the link graph. Phase 5+ work.
+- **Validation of slug targets**: considered failing parse on a slug that doesn't resolve. Rejected — would create a chicken-and-egg problem where writing a new entry that supersedes an entry you're about to delete crashes parse. Dangling-slug tolerance is the cheaper and more forgiving default.
+
+**Test coverage**: 8 new tests across two files.
+
+`internal/format/relations_test.go` (3 tests):
+- `TestParseSupersedesAndContradicts` — YAML parse populates both fields.
+- `TestParseWithoutRelationsFields` — legacy entries still parse with empty slices.
+- `TestMarshalPreservesRelations` — round-trip preserves fields; empty slices emit nothing (omitempty).
+
+`internal/search/relations_test.go` (5 tests):
+- `TestSupersedesBoostRanksHigherWithinClass` — same-class entries, one with supersedes links, boosted entry ranks first.
+- `TestSupersedesBoostCapsAtThreeLinks` — anti-gaming: 10-link entry gets the same boost as 3-link; natural date order wins when the cap equalizes.
+- `TestContradictsCoRetrievalSurfacesTarget` — entry A with `contradicts: [B]` pulls B into results with an `Annotation`, even if B doesn't match the query keyword.
+- `TestContradictsCoRetrievalDoesNotDoubleCount` — an entry that matches naturally AND is contradicted by another top result appears exactly once.
+- `TestSlugFromPath` — helper unit test covering path-with-dir, path-with-ext, plain name, extensionless name, empty input.
+
+**Consequence for callers**: `Result` gains a new exported `Annotation string` field. Existing callers that don't read the field are unaffected (zero value is empty string). MCP callers see the annotation rendered inline in the H3 heading of each result — `### [scope] slug · kind · date · (contradicts "topic")`.
+
+---
+
 ## TBD — project-personal sync strategy
 
 **Status**: Open.

@@ -79,7 +79,15 @@ func writeResultSection(b *strings.Builder, r Result, query string, expand bool)
 		scopeLabel += ":pending"
 	}
 
-	fmt.Fprintf(b, "### [%s] %s · %s · %s\n", scopeLabel, slug, r.Metadata.Kind, r.Metadata.Date)
+	if r.Annotation != "" {
+		// Co-retrieved entries (e.g. contradicts targets) carry an
+		// inline tag on the heading so the reader can immediately
+		// see why the entry surfaced — it's a relationship hit,
+		// not a keyword match.
+		fmt.Fprintf(b, "### [%s] %s · %s · %s · (%s)\n", scopeLabel, slug, r.Metadata.Kind, r.Metadata.Date, r.Annotation)
+	} else {
+		fmt.Fprintf(b, "### [%s] %s · %s · %s\n", scopeLabel, slug, r.Metadata.Kind, r.Metadata.Date)
+	}
 	fmt.Fprintf(b, "**topic**: %s\n", r.Metadata.Topic)
 	if len(r.Metadata.Tags) > 0 {
 		fmt.Fprintf(b, "**tags**: %s\n", strings.Join(r.Metadata.Tags, ", "))

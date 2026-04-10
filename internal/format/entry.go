@@ -54,6 +54,30 @@ type Metadata struct {
 	Confidence   Confidence `yaml:"confidence,omitempty"`    // enum: high, medium, low (default: high)
 	Accessed     int        `yaml:"accessed,omitempty"`      // how many times returned by mm_search
 	LastAccessed string     `yaml:"last_accessed,omitempty"` // ISO 8601 date of last search hit
+
+	// Supersedes lists slugs of entries this one explicitly replaces.
+	// Human-populated only (never auto-generated) — see the /mm-review
+	// skill and docs/DECISIONS.md 2026-04-10 supersedes/contradicts
+	// entry. At search time, each listed slug contributes a within-class
+	// score boost (capped at 3 links) so an entry that has superseded
+	// multiple older ones surfaces preferentially. Dangling slugs are
+	// tolerated (no validation failure): a slug that no longer resolves
+	// surfaces a broken link for human review rather than being silently
+	// erased, consistent with hard rule #7 (knowledge is never silently
+	// deleted). Borrowed from shiba-memory's memory_links schema but
+	// stripped of automation.
+	Supersedes []string `yaml:"supersedes,omitempty"`
+
+	// Contradicts lists slugs of entries this one conflicts with.
+	// Unlike Supersedes, Contradicts does NOT contribute to the score
+	// boost — instead it triggers co-retrieval: when an entry with a
+	// non-empty Contradicts list appears in mm_search results, the
+	// listed entries are pulled into the output alongside it with a
+	// "(contradicts <topic>)" annotation, regardless of whether they
+	// match the query. This matches mastermind's "knowledge is never
+	// silently overridden" philosophy: tensions surface prominently
+	// rather than burying under score math. Human-populated only.
+	Contradicts []string `yaml:"contradicts,omitempty"`
 }
 
 // Kind classifies an entry. See docs/FORMAT.md for the meaning of each.

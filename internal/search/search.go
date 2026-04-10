@@ -170,6 +170,14 @@ type Result struct {
 	Body     string         // the full markdown body (for presentation)
 	Metadata format.Metadata
 
+	// Annotation is an optional tag rendered alongside the result
+	// heading in the output markdown. Used by the contradicts
+	// co-retrieval pass to mark entries pulled in via a
+	// contradicts: [...] link on one of the top-K results.
+	// Empty for normal keyword/fuzzy hits. See the Contradicts
+	// field on format.Metadata and DECISIONS.md 2026-04-10.
+	Annotation string
+
 	// class is the tier bucket used as the primary sort key. Unexported
 	// so it never crosses the MCP boundary — callers see only the
 	// order of results, not which class produced them.
@@ -515,9 +523,50 @@ func (k *KeywordSearcher) Search(q Query) ([]Result, error) {
 		sortResultsByTier(results)
 	}
 
+	// ── Supersedes boost ──
+	//
+	// Within-class score multiplier for entries that explicitly
+	// supersede other entries. The count is capped at 3 to prevent
+	// gaming. Applied BEFORE the limit trim so a boosted entry that
+	// was previously just outside the top-N can surface into it.
+	// Class still dominates — the boost cannot bridge a class gap
+	// because it only scales Score, and the comparator checks class
+	// first.
+	//
+	// Note: contradicts is deliberately NOT included in the boost
+	// count. Contradicts triggers co-retrieval below instead, which
+	// is a stronger signal: the contradicting entry is pulled into
+	// the result list regardless of its own keyword score. See
+	// DECISIONS.md 2026-04-10 supersedes/contradicts entry for the
+	// rationale (shiba-memory treats contradicts as a score booster;
+	// mastermind treats it as a co-retrieval signal because
+	// "contradicts gets the same boost as supports" is wrong under
+	// our 'knowledge is never silently overridden' philosophy).
+	for i := range results {
+		linked := len(results[i].Metadata.Supersedes)
+		if linked > 3 {
+			linked = 3
+		}
+		if linked > 0 {
+			results[i].Score *= 1.0 + float64(linked)*0.2
+		}
+	}
+	sortResultsByTier(results)
+
 	if len(results) > limit {
 		results = results[:limit]
 	}
+
+	// ── Contradicts co-retrieval ──
+	//
+	// For every top-K result with a non-empty Contradicts list,
+	// look up the listed slugs and append them as additional
+	// results with a "(contradicts <topic>)" annotation. These
+	// appended entries bypass the limit — they're co-retrieved
+	// because of the relationship, not because of their own
+	// keyword match. Dedupe against entries already in results,
+	// cap total appended at 3 to keep the output block bounded.
+	results = appendContradictsCoRetrieval(results, filtered, k)
 
 	// For results that matched on topic/tags alone, we still want the
 	// body in the returned slice so the caller can format a usable
@@ -724,6 +773,110 @@ func projectMultiplier(queryProject, entryProject string) float64 {
 		return 1.3
 	}
 	return 0.8
+}
+
+// maxCoRetrievedContradicts caps how many contradicts co-retrieved
+// entries can be appended to a single search result block. Keeps
+// the output bounded when a single entry contradicts many others.
+const maxCoRetrievedContradicts = 3
+
+// appendContradictsCoRetrieval implements the contradicts
+// co-retrieval pass. For every top-K result that has a non-empty
+// Contradicts list, it looks up the listed slugs in the filtered
+// corpus and appends them as additional Results with a
+// "(contradicts <topic>)" Annotation. Appended entries bypass the
+// limit — the co-retrieval relationship is the reason they surface,
+// not their own keyword score.
+//
+// Dedupes against entries already in results so an entry that
+// naturally matched the query AND is contradicted by another top
+// result is not duplicated. Caps the total appended entries at
+// maxCoRetrievedContradicts.
+//
+// Slug matching uses the filename without extension, which is the
+// convention mastermind uses for entry identifiers (see
+// internal/store for the slug generation). Dangling slugs (no
+// matching file in the filtered corpus) are silently skipped,
+// consistent with hard rule #7 — broken links surface for review,
+// never silently erase.
+func appendContradictsCoRetrieval(results []Result, filtered []store.EntryRef, k *KeywordSearcher) []Result {
+	// Collect all contradicts slugs from the top-K results.
+	seen := make(map[string]bool, len(results))
+	for _, r := range results {
+		seen[slugFromPath(r.Ref.Path)] = true
+	}
+
+	type pendingCo struct {
+		slug       string
+		annotation string
+	}
+	var pending []pendingCo
+	pendingSet := make(map[string]bool)
+	for _, r := range results {
+		for _, slug := range r.Metadata.Contradicts {
+			slug = strings.TrimSpace(slug)
+			if slug == "" || seen[slug] || pendingSet[slug] {
+				continue
+			}
+			pending = append(pending, pendingCo{
+				slug:       slug,
+				annotation: fmt.Sprintf("contradicts %q", r.Metadata.Topic),
+			})
+			pendingSet[slug] = true
+			if len(pending) >= maxCoRetrievedContradicts {
+				break
+			}
+		}
+		if len(pending) >= maxCoRetrievedContradicts {
+			break
+		}
+	}
+	if len(pending) == 0 {
+		return results
+	}
+
+	// Look up each pending slug in the filtered corpus. The filtered
+	// slice is already scoped to the query's scope/kind filters, so
+	// we respect the caller's intent — a contradicts target in a
+	// filtered-out scope won't surface.
+	for _, pc := range pending {
+		for _, ref := range filtered {
+			if slugFromPath(ref.Path) != pc.slug {
+				continue
+			}
+			// Load the body lazily; co-retrieved entries need it for
+			// presentation just like normal results.
+			var body string
+			if entry, err := k.Store.LoadRef(ref); err == nil {
+				body = entry.Body
+			}
+			results = append(results, Result{
+				Ref:        ref,
+				Score:      0, // co-retrieved, not score-ranked
+				Body:       body,
+				Metadata:   ref.Metadata,
+				Annotation: pc.annotation,
+				class:      classKeyword, // arbitrary — sort pass doesn't re-order co-retrieved entries
+			})
+			break
+		}
+	}
+	return results
+}
+
+// slugFromPath returns the entry slug from its full path — the
+// filename with the .md extension stripped. Mastermind's store
+// uses slugs as the stable identifier across file moves within
+// a scope, so two entries with the same slug but different
+// directories are considered the same logical entry.
+func slugFromPath(path string) string {
+	base := path
+	// Strip directory.
+	if i := strings.LastIndex(base, "/"); i >= 0 {
+		base = base[i+1:]
+	}
+	// Strip .md extension.
+	return strings.TrimSuffix(base, ".md")
 }
 
 // sortResultsByTier orders results by the tiered-fallback comparator:
