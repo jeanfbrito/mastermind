@@ -36,3 +36,7 @@ Bigger change than the T1-T7 tiered fallback work because it affects the metadat
 6. New DECISIONS.md entry explaining the shift.
 
 Defer until after T1-T7 tiered fallback ships, so the tier-class sort is stable before layering project multipliers on top.
+
+## Resolution
+
+Shipped 2026-04-10. Query.Project is now a within-class score multiplier (1.3x same-project, 1.0x general, 0.8x cross-project) instead of a hard filter. Escape hatch: Query.StrictProject=true restores the old hard-filter behavior for CLI callers that need strict scoping. 5 new tests in internal/search lock in the soft-filter semantics, strict-filter escape hatch, multiplier matrix, within-class boundedness, and the updated matchesMetadataFilters behavior. Borrowed verbatim from shiba-memory's 002_profiles_scoping.sql weights. Full rationale in docs/DECISIONS.md 2026-04-10 entry.
