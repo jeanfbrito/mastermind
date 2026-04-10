@@ -258,6 +258,31 @@ The Go version minimum (`go 1.25`) was a concern briefly but we're already on 1.
 
 ---
 
+## 2026-04-09 — .knowledge/ git strategy: commit live, ignore pending
+
+**Decision**: Project `.knowledge/` directories are committed to git. Auto-init creates a `.knowledge/.gitignore` that excludes `pending/` (auto-extracted, pre-review entries). Everything else — topic directories with live entries, `resolved-loops/` — is committed.
+
+**Rationale**: The `.knowledge/` directory in a project repo IS the project-shared scope. "Shared" means committed. The whole value proposition is that project lessons survive across clones, machines, and teammates. Gitignoring the entire directory would make "project-shared" a misnomer.
+
+`pending/` is excluded because auto-extracted entries are personal workflow artifacts — they haven't been reviewed, may contain noise, and pollute git history with churn from every session-close extraction. Once promoted to live (via `mm_promote`), they move into topic directories and get committed naturally.
+
+`resolved-loops/` is committed because resolved loops have historical value: they document what was investigated and concluded, which prevents re-opening the same question in six months.
+
+**What auto-init creates**:
+```
+.knowledge/
+.knowledge/.gitignore   # contains: pending/
+```
+
+**Consequence for users**: `git add .knowledge/` after promoting entries or closing loops. This is a conscious act, not an automatic one — consistent with git's "explicit staging" model. A future `/mm-review` skill could remind the user to commit after promotion.
+
+**Alternatives considered**:
+- *Gitignore everything*: rejected — defeats project-shared scope entirely. Entries only live on one machine.
+- *Commit everything including pending/*: rejected — auto-extraction creates churn, pre-review entries may be low quality, and two developers' pending queues would conflict.
+- *Partial ignore with .personal/*: considered but unnecessary — project-personal scope already lives in `~/.claude/projects/`, not in `.knowledge/`. There's no `.personal/` subdirectory to worry about.
+
+---
+
 ## TBD — project-personal sync strategy
 
 **Status**: Open.

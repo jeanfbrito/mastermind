@@ -146,6 +146,12 @@ func buildSessionConfig(cwd string) (store.Config, error) {
 			knowledgeDir := filepath.Join(gitRoot, ".knowledge")
 			if err := os.MkdirAll(knowledgeDir, 0o755); err == nil {
 				cfg.ProjectSharedRoot = knowledgeDir
+				// Seed .gitignore so pending/ (auto-extracted, pre-review)
+				// stays out of version control.
+				gi := filepath.Join(knowledgeDir, ".gitignore")
+				if _, err := os.Stat(gi); os.IsNotExist(err) {
+					_ = os.WriteFile(gi, []byte("pending/\n"), 0o644)
+				}
 			}
 		}
 	}

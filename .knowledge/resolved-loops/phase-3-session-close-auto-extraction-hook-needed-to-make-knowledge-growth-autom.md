@@ -11,6 +11,8 @@ kind: open-loop
 scope: project-shared
 category: mcp
 confidence: high
+accessed: 1
+last_accessed: "2026-04-10"
 ---
 
 ## Status
@@ -25,3 +27,7 @@ A SessionClose hook that:
 
 ## Open question
 Claude Code SessionClose hooks may not have access to conversation content. Need to research what context is available to a session-close hook subprocess. If no conversation access, may need the agent to dump a summary to a temp file before the hook runs.
+
+## Resolution
+
+PreCompact hook handles auto-extraction from transcripts before context compression. SessionClose (SessionEnd) can't access conversation content, but PreCompact can. Implemented and dogfooding.
