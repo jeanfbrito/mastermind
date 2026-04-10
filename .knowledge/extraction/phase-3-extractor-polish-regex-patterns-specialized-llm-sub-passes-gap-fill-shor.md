@@ -14,6 +14,8 @@ kind: open-loop
 scope: project-shared
 category: extraction
 confidence: high
+accessed: 1
+last_accessed: "2026-04-10"
 ---
 
 ## What's open
