@@ -11,6 +11,8 @@ kind: pattern
 scope: project-shared
 category: mcp
 confidence: high
+accessed: 1
+last_accessed: "2026-04-10"
 ---
 
 ## Pattern
