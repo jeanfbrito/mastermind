@@ -58,3 +58,7 @@ Much smaller than the original open loop. Isolated. Ships in one commit.
 ## Source
 
 `~/Github/shiba-memory/cli/src/hooks/stop.ts`; mining report 2026-04-10 (Agent a50b8964 hook patterns); the parent open loop `phase-5-experiment-stop-hook-auto-captures-low-confidence-open-loops...` documents why the original framing doesn't work.
+
+## Resolution
+
+Shipped 2026-04-10. New cmd/mastermind/stop.go implements the runStop subcommand: reads Claude Code Stop hook JSON from stdin, appends one JSONL line to ~/.knowledge/logs/sessions.jsonl, exits silently. Turn-count gate marks message_count < 4 entries as "short": true without dropping them. Respects MASTERMIND_NO_AUTO_INIT. Silent on all error paths (empty stdin, malformed JSON, missing home dir, write failure) because a background hook spamming stderr on every turn is unacceptable. 6 new tests in stop_test.go cover happy path, short-turn flagging, multi-invocation append, env var bypass, empty stdin, and malformed JSON. Dispatch wired in main.go between extract-audit and suggest; help text updated; ARCHITECTURE.md CLI section documents the new subcommand + the response-text-not-available caveat. Wire it in Claude Code settings.json as: {"hooks":{"Stop":[{"matcher":"","hooks":[{"type":"command","command":"mastermind stop","timeout":5}]}]}}
