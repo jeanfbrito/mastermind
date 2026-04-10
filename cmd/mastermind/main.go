@@ -1,11 +1,11 @@
 // Command mastermind is the ADHD cure for agents that you always
 // dreamed for yourself.
 //
-// It runs as an MCP server over stdio plus two CLI subcommands
-// (session-start, session-close) wired to Claude Code hooks. Together
-// they form a continuity layer: context is surfaced automatically at
-// session start, lessons are extracted automatically at session close,
-// and the user's working memory is never taxed by the tool itself.
+// It runs as an MCP server over stdio plus CLI subcommands wired to
+// Claude Code hooks. Together they form a continuity layer: context is
+// surfaced automatically at session start and after context compaction,
+// lessons are extracted automatically before compaction, and the user's
+// working memory is never taxed by the tool itself.
 //
 // See the project docs for the design:
 //   - docs/CONTINUITY.md   — the load-bearing behaviors
@@ -64,6 +64,12 @@ func main() {
 		case "session-start":
 			if err := runSessionStart(); err != nil {
 				fmt.Fprintf(os.Stderr, "mastermind session-start: %s\n", err)
+				os.Exit(1)
+			}
+			return
+		case "post-compact":
+			if err := runPostCompact(); err != nil {
+				fmt.Fprintf(os.Stderr, "mastermind post-compact: %s\n", err)
 				os.Exit(1)
 			}
 			return
@@ -392,6 +398,127 @@ func formatSessionStart(openLoops, projectEntries []store.EntryRef, pendingCount
 	}
 
 	b.WriteString("_Use mm_search before complex tasks. Call mm_write to capture lessons as you work._\n")
+	return b.String()
+}
+
+// ─── post-compact subcommand ──────────────────────────────────────────
+
+// runPostCompact implements the post-compact subcommand. It fires after
+// Claude Code compresses the conversation context, at which point the
+// agent has lost most of its working memory. Re-injecting the curated
+// project slice re-hydrates project context so the next turn starts
+// oriented rather than blank.
+//
+// Scope is narrower than session-start: project-shared and
+// project-personal only. User-personal and cross-project open loops
+// are omitted — PostCompact is specifically about re-hydrating the
+// project the agent was just working in, not the full session picture.
+//
+// PostCompact hook input JSON may include session_id and cwd fields.
+// We read them if present but fall back to cwd flag / os.Getwd().
+// Silent on stdin errors (hook may not provide input in all versions).
+//
+// If there is nothing to surface, prints nothing and exits 0.
+// This honors the silent-unless-needed rule from CONTINUITY.md.
+func runPostCompact() error {
+	// PostCompact hook sends JSON on stdin (same shape as hookInput).
+	// Try to decode it, but don't fail if stdin is empty or malformed.
+	cwd := parseCwdFlag()
+	var input hookInput
+	if err := json.NewDecoder(os.Stdin).Decode(&input); err == nil {
+		if input.Cwd != "" {
+			cwd = input.Cwd
+		}
+	}
+
+	cfg, err := buildSessionConfig(cwd)
+	if err != nil {
+		return fmt.Errorf("build session config: %w", err)
+	}
+
+	s := store.New(cfg)
+	projectName := project.DetectFromGit(cwd)
+
+	// Collect project-scoped open loops only (not user-personal).
+	openLoops, err := collectProjectOpenLoops(s)
+	if err != nil {
+		return fmt.Errorf("collect project open loops: %w", err)
+	}
+
+	// Collect project-relevant knowledge entries.
+	projectEntries, err := collectProjectEntries(s, projectName)
+	if err != nil {
+		return fmt.Errorf("collect project entries: %w", err)
+	}
+
+	output := formatPostCompact(openLoops, projectEntries)
+	if output != "" {
+		fmt.Print(output)
+	}
+	return nil
+}
+
+// collectProjectOpenLoops gathers open-loop entries from project-scoped
+// stores only (project-shared and project-personal). User-personal open
+// loops are excluded — PostCompact is about re-hydrating the current
+// project, not the full user knowledge picture.
+func collectProjectOpenLoops(s *store.Store) ([]store.EntryRef, error) {
+	var loops []store.EntryRef
+
+	for _, scope := range []format.Scope{format.ScopeProjectShared, format.ScopeProjectPersonal} {
+		live, err := s.ListLive(scope)
+		if err != nil {
+			return nil, err
+		}
+		for _, ref := range live {
+			if ref.Metadata.Kind == format.KindOpenLoop {
+				loops = append(loops, ref)
+			}
+		}
+
+		pending, err := s.ListPending(scope)
+		if err != nil {
+			return nil, err
+		}
+		for _, ref := range pending {
+			if ref.Metadata.Kind == format.KindOpenLoop {
+				loops = append(loops, ref)
+			}
+		}
+	}
+
+	sortByDateDesc(loops)
+	return loops, nil
+}
+
+// formatPostCompact renders the post-compact injection as compact markdown.
+// Returns empty string when there's nothing to surface.
+// Omits pending count (noise after compaction) and keeps the header terse.
+func formatPostCompact(openLoops, projectEntries []store.EntryRef) string {
+	if len(openLoops) == 0 && len(projectEntries) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("## mastermind (post-compact)\n\n")
+
+	if len(openLoops) > 0 {
+		fmt.Fprintf(&b, "**Open loops** (%d):\n", len(openLoops))
+		for _, ref := range openLoops {
+			fmt.Fprintf(&b, "- %s (%s)\n", ref.Metadata.Topic, ref.Metadata.Date)
+		}
+		b.WriteByte('\n')
+	}
+
+	if len(projectEntries) > 0 {
+		fmt.Fprintf(&b, "**Project knowledge** (%d entries):\n", len(projectEntries))
+		for _, ref := range projectEntries {
+			fmt.Fprintf(&b, "- %s · %s\n", ref.Metadata.Topic, ref.Metadata.Kind)
+		}
+		b.WriteByte('\n')
+	}
+
+	b.WriteString("_Context was just compacted. Use mm_search if you need deeper context._\n")
 	return b.String()
 }
 
@@ -864,6 +991,7 @@ Usage:
   mastermind                    Start MCP server over stdio (default; used by Claude Code)
   mastermind mcp                Explicit: start MCP server
   mastermind session-start      Claude Code session-start hook (surfaces open loops + project context)
+  mastermind post-compact       Claude Code PostCompact hook (re-injects project context after compaction)
   mastermind session-close      Claude Code session-close hook (phase 3b, not implemented)
   mastermind extract            Extract knowledge from a conversation transcript
   mastermind suggest            PostToolUse hook — nudge when knowledge exists for a file
