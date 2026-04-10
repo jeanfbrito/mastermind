@@ -283,8 +283,19 @@ func runMCPServer() error {
 //
 // If there is nothing to surface, it prints nothing and exits 0.
 // This honors the silent-unless-needed rule from CONTINUITY.md.
+// sessionStartJSON is the structured output shape for --json.
+// Fields are always present (empty slices when nothing to surface)
+// so consumers can rely on shape stability.
+type sessionStartJSON struct {
+	Project        string         `json:"project,omitempty"`
+	PendingCount   int            `json:"pending_count"`
+	OpenLoops      []entrySummary `json:"open_loops"`
+	ProjectEntries []entrySummary `json:"project_entries"`
+}
+
 func runSessionStart() error {
 	cwd := parseCwdFlag()
+	jsonOut := parseJSONFlag()
 	cfg, err := buildSessionConfig(cwd)
 	if err != nil {
 		return fmt.Errorf("build session config: %w", err)
@@ -311,6 +322,15 @@ func runSessionStart() error {
 		return fmt.Errorf("count pending: %w", err)
 	}
 
+	if jsonOut {
+		return printJSON(sessionStartJSON{
+			Project:        projectName,
+			PendingCount:   pendingCount,
+			OpenLoops:      entrySummariesFromRefs(openLoops),
+			ProjectEntries: entrySummariesFromRefs(projectEntries),
+		})
+	}
+
 	output := formatSessionStart(openLoops, projectEntries, pendingCount)
 	if output != "" {
 		fmt.Print(output)
@@ -331,6 +351,64 @@ func parseCwdFlag() string {
 		return "."
 	}
 	return cwd
+}
+
+// parseJSONFlag returns true if --json appears as a standalone arg
+// after the subcommand. Used by CLI subcommands to opt into
+// structured output for scripting and CI pipelines (analog of
+// soulforge's `sf --headless`). Mirrors parseCwdFlag's style —
+// the CLI is stdlib-only and does not use the flag package.
+func parseJSONFlag() bool {
+	if len(os.Args) < 3 {
+		return false
+	}
+	for _, arg := range os.Args[2:] {
+		if arg == "--json" {
+			return true
+		}
+	}
+	return false
+}
+
+// printJSON encodes v as indented JSON to stdout. Used by CLI
+// subcommands when --json is set. Indentation is two spaces — human
+// readable under `| jq` without being obnoxiously wide.
+func printJSON(v any) error {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
+}
+
+// entrySummary is the flat JSON shape for an entry reference,
+// used by --json output of subcommands that surface knowledge
+// entries (session-start, post-compact).
+type entrySummary struct {
+	Topic   string `json:"topic"`
+	Kind    string `json:"kind"`
+	Date    string `json:"date,omitempty"`
+	Scope   string `json:"scope"`
+	Project string `json:"project,omitempty"`
+	Path    string `json:"path"`
+}
+
+// entrySummariesFromRefs converts a slice of EntryRef into the
+// JSON-shape used by --json output.
+func entrySummariesFromRefs(refs []store.EntryRef) []entrySummary {
+	if len(refs) == 0 {
+		return []entrySummary{}
+	}
+	out := make([]entrySummary, 0, len(refs))
+	for _, r := range refs {
+		out = append(out, entrySummary{
+			Topic:   r.Metadata.Topic,
+			Kind:    string(r.Metadata.Kind),
+			Date:    r.Metadata.Date,
+			Scope:   string(r.Metadata.Scope),
+			Project: r.Metadata.Project,
+			Path:    r.Path,
+		})
+	}
+	return out
 }
 
 // collectOpenLoops gathers all open-loop entries from live and pending
@@ -476,10 +554,18 @@ func formatSessionStart(openLoops, projectEntries []store.EntryRef, pendingCount
 //
 // If there is nothing to surface, prints nothing and exits 0.
 // This honors the silent-unless-needed rule from CONTINUITY.md.
+// postCompactJSON is the structured output shape for post-compact --json.
+type postCompactJSON struct {
+	Project        string         `json:"project,omitempty"`
+	OpenLoops      []entrySummary `json:"open_loops"`
+	ProjectEntries []entrySummary `json:"project_entries"`
+}
+
 func runPostCompact() error {
 	// PostCompact hook sends JSON on stdin (same shape as hookInput).
 	// Try to decode it, but don't fail if stdin is empty or malformed.
 	cwd := parseCwdFlag()
+	jsonOut := parseJSONFlag()
 	var input hookInput
 	if err := json.NewDecoder(os.Stdin).Decode(&input); err == nil {
 		if input.Cwd != "" {
@@ -505,6 +591,14 @@ func runPostCompact() error {
 	projectEntries, err := collectProjectEntries(s, projectName)
 	if err != nil {
 		return fmt.Errorf("collect project entries: %w", err)
+	}
+
+	if jsonOut {
+		return printJSON(postCompactJSON{
+			Project:        projectName,
+			OpenLoops:      entrySummariesFromRefs(openLoops),
+			ProjectEntries: entrySummariesFromRefs(projectEntries),
+		})
 	}
 
 	output := formatPostCompact(openLoops, projectEntries)
@@ -595,8 +689,16 @@ type hookInput struct {
 //   - MASTERMIND_EXTRACT_MODE: "keyword" (default) or "llm"
 //   - MASTERMIND_LLM_PROVIDER: "anthropic" (default) or "ollama"
 //   - MASTERMIND_LLM_MODEL: model identifier
+// extractJSON is the structured output shape for extract --json.
+type extractJSON struct {
+	TranscriptPath string `json:"transcript_path,omitempty"`
+	Written        int    `json:"entries_written"`
+	Failed         int    `json:"entries_failed"`
+}
+
 func runExtract() error {
 	var transcriptPath, cwd string
+	jsonOut := parseJSONFlag()
 
 	// Check for --from-hook flag: read JSON from stdin.
 	fromHook := false
@@ -649,6 +751,9 @@ func runExtract() error {
 	}
 	transcript := extract.NormalizeTranscript(string(data))
 	if strings.TrimSpace(transcript) == "" {
+		if jsonOut {
+			return printJSON(extractJSON{TranscriptPath: transcriptPath})
+		}
 		return nil // nothing to extract
 	}
 
@@ -686,12 +791,15 @@ func runExtract() error {
 	}
 
 	if len(entries) == 0 {
+		if jsonOut {
+			return printJSON(extractJSON{TranscriptPath: transcriptPath})
+		}
 		fmt.Fprintf(os.Stderr, "mastermind extract: no entries extracted\n")
 		return nil
 	}
 
 	// Write each entry to pending/.
-	var written int
+	var written, failed int
 	for i := range entries {
 		// Assign scope: project-shared if project store is configured,
 		// otherwise user-personal.
@@ -702,12 +810,22 @@ func runExtract() error {
 		}
 
 		if _, err := s.Write(&entries[i]); err != nil {
+			// Write failures still go to stderr even in JSON mode —
+			// they're diagnostic detail, not structured output.
 			fmt.Fprintf(os.Stderr, "mastermind extract: write failed for %q: %v\n", entries[i].Metadata.Topic, err)
+			failed++
 			continue
 		}
 		written++
 	}
 
+	if jsonOut {
+		return printJSON(extractJSON{
+			TranscriptPath: transcriptPath,
+			Written:        written,
+			Failed:         failed,
+		})
+	}
 	fmt.Fprintf(os.Stderr, "mastermind extract: %d entries written to pending/\n", written)
 	return nil
 }
@@ -741,10 +859,22 @@ func envOrDefault(key, defaultVal string) string {
 // runDiscover implements the discover subcommand. It mines git history
 // and/or source code for knowledge using an LLM (Haiku or any
 // OpenAI-compatible endpoint) and writes entries to pending/.
+// discoverJSON is the structured output shape for discover --json.
+type discoverJSON struct {
+	Mode            string `json:"mode"`
+	Depth           int    `json:"depth"`
+	Provider        string `json:"provider"`
+	EntriesWritten  int    `json:"entries_written"`
+	CommitsAnalyzed int    `json:"commits_analyzed"`
+	CommitsSkipped  int    `json:"commits_skipped"`
+	PackagesScanned int    `json:"packages_scanned"`
+}
+
 func runDiscover() error {
 	mode := "all"
 	depth := 100
 	cwd, _ := os.Getwd()
+	jsonOut := parseJSONFlag()
 
 	// Simple flag parsing (no flag package — matches other subcommands).
 	args := os.Args[2:]
@@ -765,6 +895,9 @@ func runDiscover() error {
 				cwd = args[i+1]
 				i++
 			}
+		case "--json":
+			// Consumed by parseJSONFlag above; ignore here to avoid
+			// the positional-mode branch treating it as a mode name.
 		default:
 			// Positional: treat as mode if it's a known value.
 			if args[i] == "git" || args[i] == "codebase" || args[i] == "all" {
@@ -804,11 +937,27 @@ func runDiscover() error {
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "mastermind discover: mode=%s depth=%d provider=%s\n", mode, depth, resolved.Flavor)
+	// Prose startup message goes to stderr in both modes — stdout is
+	// reserved for the final JSON object when --json is set.
+	if !jsonOut {
+		fmt.Fprintf(os.Stderr, "mastermind discover: mode=%s depth=%d provider=%s\n", mode, depth, resolved.Flavor)
+	}
 
 	result, err := disc.Run()
 	if err != nil {
 		return err
+	}
+
+	if jsonOut {
+		return printJSON(discoverJSON{
+			Mode:            mode,
+			Depth:           depth,
+			Provider:        resolved.Flavor,
+			EntriesWritten:  len(result.Entries),
+			CommitsAnalyzed: result.CommitsAnalyzed,
+			CommitsSkipped:  result.CommitsSkipped,
+			PackagesScanned: result.PackagesScanned,
+		})
 	}
 
 	fmt.Fprintf(os.Stderr, "\nDiscovery complete: %d entries written to pending/\n", len(result.Entries))
@@ -858,20 +1007,40 @@ var skipSegments = map[string]bool{
 // matching the file path exist in any .knowledge/ scope. If yes,
 // counts entries and outputs a nudge. If no, outputs nothing.
 // Executes in <10ms.
+// suggestJSON is the structured output shape for suggest --json.
+// Matched=false means "nothing to nudge about" — other fields omitted.
+type suggestJSON struct {
+	Matched  bool   `json:"matched"`
+	FilePath string `json:"file_path,omitempty"`
+	Topic    string `json:"topic,omitempty"`
+	Dir      string `json:"dir,omitempty"`
+	Count    int    `json:"count,omitempty"`
+}
+
 func runSuggest() error {
+	jsonOut := parseJSONFlag()
 	var input suggestHookInput
 	if err := json.NewDecoder(os.Stdin).Decode(&input); err != nil {
+		if jsonOut {
+			return printJSON(suggestJSON{Matched: false})
+		}
 		return nil // silent on bad input — don't block the agent
 	}
 
 	var toolInput suggestToolInput
 	if err := json.Unmarshal(input.ToolInput, &toolInput); err != nil || toolInput.FilePath == "" {
+		if jsonOut {
+			return printJSON(suggestJSON{Matched: false})
+		}
 		return nil // no file path — nothing to suggest
 	}
 
 	// Extract keywords from the file path.
 	keywords := extractPathKeywords(toolInput.FilePath)
 	if len(keywords) == 0 {
+		if jsonOut {
+			return printJSON(suggestJSON{Matched: false, FilePath: toolInput.FilePath})
+		}
 		return nil
 	}
 
@@ -882,6 +1051,9 @@ func runSuggest() error {
 	}
 	cfg, err := buildSessionConfig(cwd)
 	if err != nil {
+		if jsonOut {
+			return printJSON(suggestJSON{Matched: false, FilePath: toolInput.FilePath})
+		}
 		return nil
 	}
 
@@ -920,26 +1092,43 @@ func runSuggest() error {
 	}
 
 	if len(matches) == 0 {
+		if jsonOut {
+			return printJSON(suggestJSON{Matched: false, FilePath: toolInput.FilePath})
+		}
 		return nil
 	}
 
 	// Debounce: skip if we suggested the same file recently.
+	// In --json mode we still emit the match result (scripting callers
+	// want a deterministic answer regardless of Claude Code's debounce
+	// state), so the debounce write-through only guards the prose path.
 	debounceFile := filepath.Join(os.TempDir(), "mastermind-suggest-debounce")
 	debounceKey := toolInput.FilePath
-	if data, err := os.ReadFile(debounceFile); err == nil {
-		parts := strings.SplitN(string(data), "|", 2)
-		if len(parts) == 2 && parts[1] == debounceKey {
-			if ts, err := time.Parse(time.RFC3339, parts[0]); err == nil {
-				if time.Since(ts) < 60*time.Second {
-					return nil // debounced
+	if !jsonOut {
+		if data, err := os.ReadFile(debounceFile); err == nil {
+			parts := strings.SplitN(string(data), "|", 2)
+			if len(parts) == 2 && parts[1] == debounceKey {
+				if ts, err := time.Parse(time.RFC3339, parts[0]); err == nil {
+					if time.Since(ts) < 60*time.Second {
+						return nil // debounced
+					}
 				}
 			}
 		}
+		_ = os.WriteFile(debounceFile, []byte(time.Now().Format(time.RFC3339)+"|"+debounceKey), 0o644)
 	}
-	_ = os.WriteFile(debounceFile, []byte(time.Now().Format(time.RFC3339)+"|"+debounceKey), 0o644)
 
 	// Format nudge with the top entry's topic for immediate context.
 	best := matches[0]
+	if jsonOut {
+		return printJSON(suggestJSON{
+			Matched:  true,
+			FilePath: toolInput.FilePath,
+			Topic:    best.topTopic,
+			Dir:      best.dir,
+			Count:    best.count,
+		})
+	}
 	if best.topTopic != "" {
 		extra := best.count - 1
 		if extra > 0 {
@@ -1063,8 +1252,16 @@ Usage:
   mastermind version            Print version and exit
   mastermind help               Show this help
 
+Global options (available on most subcommands):
+  --json                        Emit structured JSON instead of human-readable output.
+                                Supported by: session-start, post-compact, discover,
+                                extract, extract-audit, suggest.
+  --cwd DIR                     Override the working directory used for store/config
+                                resolution. Supported by: session-start, post-compact,
+                                discover, extract.
+
 Discover options:
-  mastermind discover [git|codebase|all] [--depth N] [--cwd DIR]
+  mastermind discover [git|codebase|all] [--depth N] [--cwd DIR] [--json]
 
 Configuration (model / provider selection):
   mastermind reads ~/.knowledge/config.json for per-task provider and
@@ -1084,7 +1281,7 @@ MCP tools (for agent use):
   mm_search       Search persistent knowledge across scopes
   mm_write        Write a candidate entry to the pending-review queue
   mm_promote      Move a pending entry to the live store (user-gated)
-  mm_close_loop   Mark an open-loop as resolved (phase 3, not implemented)
+  mm_close_loop   Mark an open-loop as resolved (moves to resolved-loops/)
 
 Setup:
   mastermind expects a ~/.knowledge/ directory. Initialize it as a git repo

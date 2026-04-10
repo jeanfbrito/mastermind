@@ -115,6 +115,15 @@ These subcommands are **not** MCP tools — they are CLI commands invoked by Cla
 2. **`mastermind post-compact [--cwd <dir>]`** — invoked by a Claude Code PostCompact hook. Fires after context compaction, when the agent has just lost most of its working memory. Re-injects a curated project-scoped slice (open loops from project-shared and project-personal only; top project knowledge entries) so the next turn starts oriented. Scope is narrower than session-start: user-personal open loops and the pending count are excluded — this is about re-hydrating the current project, not the full session picture. Reads hook JSON from stdin if present (cwd field), falls back to --cwd flag or os.Getwd(). Silent if nothing to surface.
 3. **`mastermind session-close --transcript <path>`** — invoked by a Claude Code session-close hook. Phase 1 (sync): validates and archives the transcript to `~/.knowledge/sessions/<timestamp>-<session-id>/`, forks a detached Phase 2 subprocess, returns immediately (<100ms target). Phase 2 (detached): loads the archived transcript, calls the extraction LLM, writes candidates to `<scope>/pending/`, logs telemetry. See EXTRACTION.md.
 
+Additional CLI subcommands exist for manual workflows and scripting:
+
+- `mastermind extract --transcript <path>` (also `--from-hook` for stdin JSON from Claude Code) — runs the extraction pipeline on a conversation transcript and writes candidates to `<scope>/pending/`.
+- `mastermind extract-audit` — measures extractor recall/precision against the labeled corpus in `testdata/audit/`.
+- `mastermind discover [git|codebase|all] [--depth N]` — mines git history and codebase for knowledge using Haiku/OpenAI-compat providers.
+- `mastermind suggest` — PostToolUse hook that nudges when knowledge exists for a file being Read/Edit/Written (reads Claude Code hook JSON from stdin).
+
+**Global `--json` flag (2026-04-10)**: all CLI subcommands that emit human-readable output support `--json`, which switches to structured JSON for scripting and CI pipelines. The shape is stable per subcommand (empty slices, not null; required fields always present). See the per-subcommand structs in `cmd/mastermind/main.go` (`sessionStartJSON`, `postCompactJSON`, `discoverJSON`, `extractJSON`, `suggestJSON`) for the exact schemas. `extract-audit` has had `--json` since commit fb3e119 and provided the template for the rollout.
+
 These subcommands are the load-bearing mechanism for the continuity layer. They convert mastermind from "a memory tool you use" into "a memory layer that runs silently." See CONTINUITY.md for why this distinction matters for the primary user.
 
 ## Slash commands (thin wrappers)
