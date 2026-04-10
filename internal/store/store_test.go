@@ -410,18 +410,34 @@ func TestPromoteRejectsNonPendingPath(t *testing.T) {
 	}
 }
 
-func TestPromoteRejectsPathOutsideScopes(t *testing.T) {
+func TestPromoteAcceptsPathOutsideConfiguredScopes(t *testing.T) {
+	// Promote must accept any path with the structure <root>/pending/<file>.md,
+	// even if <root> isn't a configured scope. This handles the case where
+	// the MCP server was started in a different project than the one the
+	// agent is currently working in. The path itself tells us everything.
 	s, _ := newTestStore(t)
-	outside := filepath.Join(t.TempDir(), "other", "pending", "x.md")
-	if err := os.MkdirAll(filepath.Dir(outside), 0o755); err != nil {
+	outsideRoot := filepath.Join(t.TempDir(), "other-project", ".knowledge")
+	pendingDir := filepath.Join(outsideRoot, "pending")
+	if err := os.MkdirAll(pendingDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(outside, []byte("---\ndate: 2026-04-04\nproject: x\ntopic: y\nkind: lesson\n---\n"), 0o644); err != nil {
+	outside := filepath.Join(pendingDir, "20260410-120000-cross-project-entry.md")
+	if err := os.WriteFile(outside, []byte("---\ndate: 2026-04-10\nproject: other\ntopic: cross-project entry\nkind: lesson\n---\nbody\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	_, err := s.Promote(outside)
-	if !errors.Is(err, ErrInvalidScope) {
-		t.Errorf("Promote outside configured scopes: err = %v, want ErrInvalidScope", err)
+
+	livePath, err := s.Promote(outside)
+	if err != nil {
+		t.Fatalf("Promote cross-project path: %v", err)
+	}
+	if !strings.HasPrefix(livePath, outsideRoot) {
+		t.Errorf("live path %q should start with derived root %q", livePath, outsideRoot)
+	}
+	if _, err := os.Stat(livePath); err != nil {
+		t.Errorf("live entry file not created: %v", err)
+	}
+	if _, err := os.Stat(outside); !os.IsNotExist(err) {
+		t.Errorf("pending file should be removed after promote, stat err = %v", err)
 	}
 }
 
@@ -673,6 +689,62 @@ func TestFindProjectRootReturnsEmptyWhenNoMmDir(t *testing.T) {
 func TestFindProjectRootEmptyCwd(t *testing.T) {
 	if got := FindProjectRoot(""); got != "" {
 		t.Errorf("FindProjectRoot(\"\") = %q, want empty", got)
+	}
+}
+
+// TestFindProjectRootStopsAtHome guards against the bug where a cwd
+// under $HOME would walk up and find $HOME/.knowledge/ (the user-personal
+// store), causing ProjectSharedRoot to collide with UserPersonalRoot.
+// Writes with scope=project-shared would then leak into the user store.
+func TestFindProjectRootStopsAtHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// Create a .knowledge/ directly at the fake HOME — this simulates
+	// the user-personal store.
+	if err := os.MkdirAll(filepath.Join(home, ".knowledge"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a subdirectory under HOME that has NO .knowledge/ between
+	// it and HOME. FindProjectRoot must return "" — it must NOT walk up
+	// into HOME and match HOME/.knowledge/ as a project root.
+	sub := filepath.Join(home, "some", "non-project", "dir")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got := FindProjectRoot(sub)
+	if got != "" {
+		t.Errorf("FindProjectRoot(%q) = %q, want empty (must not match $HOME/.knowledge/)", sub, got)
+	}
+}
+
+// TestFindProjectRootFindsProjectBelowHome ensures the $HOME guard
+// doesn't break the common case: a real project under $HOME with its
+// own .knowledge/ should still be detected.
+func TestFindProjectRootFindsProjectBelowHome(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	// User-personal .knowledge/ at HOME.
+	if err := os.MkdirAll(filepath.Join(home, ".knowledge"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Project with its own .knowledge/ somewhere under HOME.
+	project := filepath.Join(home, "Github", "someproject")
+	if err := os.MkdirAll(filepath.Join(project, ".knowledge"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(project, "src", "deep")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got := FindProjectRoot(sub)
+	if got != project {
+		t.Errorf("FindProjectRoot(%q) = %q, want %q", sub, got, project)
 	}
 }
 

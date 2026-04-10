@@ -97,9 +97,23 @@ func FindProjectRoot(cwd string) string {
 		return ""
 	}
 
+	// Resolve $HOME so we can stop walking before reaching it. A
+	// .knowledge/ at $HOME is the user-personal store by definition —
+	// never a project-shared root. Without this guard, any cwd under
+	// $HOME would walk up, find ~/.knowledge/, and wrongly collide
+	// ProjectSharedRoot with UserPersonalRoot.
+	home, _ := os.UserHomeDir()
+	if home != "" {
+		home, _ = filepath.Abs(home)
+	}
+
 	// Walk upward. filepath.Dir on a root path returns the root itself,
 	// so compare before/after to detect the top.
 	for {
+		// Stop before $HOME — any .knowledge/ there is user-personal, not project.
+		if home != "" && abs == home {
+			return ""
+		}
 		candidate := filepath.Join(abs, ".knowledge")
 		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
 			return abs
@@ -157,9 +171,10 @@ func (s *Store) Write(entry *format.Entry) (string, error) {
 	return target, nil
 }
 
-// Promote moves a pending entry to the live directory of its scope.
-// pendingPath must be an absolute path to a file under one of the
-// configured <scope>/pending/ directories.
+// Promote moves a pending entry from <root>/pending/ to the live
+// topic directory under <root>. The scope root is derived from the
+// path structure itself, so Promote works for any valid pending path
+// — even entries in projects that weren't configured at MCP startup.
 //
 // The destination filename is derived from the entry's topic (the
 // timestamp prefix used in pending/ is stripped). If a file with the
@@ -175,15 +190,13 @@ func (s *Store) Promote(pendingPath string) (string, error) {
 		return "", fmt.Errorf("store: abs %s: %w", pendingPath, err)
 	}
 
-	// Figure out which scope this path belongs to by matching roots.
-	scope, root := s.scopeOfPath(abs)
-	if scope == scopeUnknown {
-		return "", fmt.Errorf("%w: path not under any configured scope: %s", ErrInvalidScope, abs)
-	}
-
-	// Confirm it's actually a pending file, not a live one.
-	if !strings.Contains(abs, string(os.PathSeparator)+pendingDirName+string(os.PathSeparator)) {
-		return "", fmt.Errorf("store: promote: path is not in pending/: %s", abs)
+	// Derive the scope root from the path structure: <root>/pending/<file>.md
+	// This works for any valid pending path, even if the scope isn't
+	// configured in the current MCP session (e.g., agent is working in a
+	// different project than where mastermind was started).
+	root, err := rootFromPendingPath(abs)
+	if err != nil {
+		return "", fmt.Errorf("store: promote: %w", err)
 	}
 
 	// Load the entry so we can derive the live filename from its topic.
@@ -338,12 +351,8 @@ func (s *Store) Reject(pendingPath string) error {
 	if err != nil {
 		return fmt.Errorf("store: abs %s: %w", pendingPath, err)
 	}
-	scope, _ := s.scopeOfPath(abs)
-	if scope == scopeUnknown {
-		return fmt.Errorf("%w: path not under any configured scope: %s", ErrInvalidScope, abs)
-	}
-	if !strings.Contains(abs, string(os.PathSeparator)+pendingDirName+string(os.PathSeparator)) {
-		return fmt.Errorf("store: reject: path is not in pending/: %s", abs)
+	if _, err := rootFromPendingPath(abs); err != nil {
+		return fmt.Errorf("store: reject: %w", err)
 	}
 	if err := os.Remove(abs); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("store: remove %s: %w", abs, err)
@@ -510,9 +519,17 @@ func (s *Store) CloseLoop(entryPath string, resolution string) (string, error) {
 		return "", fmt.Errorf("store: abs %s: %w", entryPath, err)
 	}
 
+	// For CloseLoop, try the configured scope first (for entries in
+	// ~/.knowledge or a walked-up project-shared scope). Fall back to
+	// path-derived root so entries in projects the server wasn't launched
+	// in still work.
 	scope, root := s.scopeOfPath(abs)
 	if scope == scopeUnknown {
-		return "", fmt.Errorf("%w: path not under any configured scope: %s", ErrInvalidScope, abs)
+		derivedRoot, derr := rootFromLivePath(abs)
+		if derr != nil {
+			return "", fmt.Errorf("%w: %s", ErrInvalidScope, abs)
+		}
+		root = derivedRoot
 	}
 
 	data, err := os.ReadFile(abs)
@@ -792,6 +809,47 @@ func slugify(topic string) string {
 		s = strings.TrimRight(s[:80], "-")
 	}
 	return s
+}
+
+// rootFromPendingPath derives the scope root from a pending file path.
+// A valid pending path has the structure <root>/pending/<file>.md; the
+// returned root is whatever directory contains the pending/ directory.
+// This lets Promote/Reject work on entries from any project, even ones
+// the MCP server wasn't launched in.
+func rootFromPendingPath(abs string) (string, error) {
+	dir := filepath.Dir(abs)
+	if filepath.Base(dir) != pendingDirName {
+		return "", fmt.Errorf("path is not in a pending/ directory: %s", abs)
+	}
+	root := filepath.Dir(dir)
+	if root == "" || root == "." || root == "/" {
+		return "", fmt.Errorf("pending/ has no parent directory: %s", abs)
+	}
+	return root, nil
+}
+
+// rootFromLivePath derives the scope root from a live entry path. A
+// live entry lives at <root>/<category>/<slug>.md or <root>/<slug>.md.
+// This helper walks upward from the entry looking for a .knowledge or
+// similar directory name as a signal that we've reached the scope root.
+// If no such marker is found, returns the immediate parent.
+func rootFromLivePath(abs string) (string, error) {
+	// Walk upward looking for a .knowledge or memory directory ancestor.
+	// Those are the canonical scope root names used by auto-init and
+	// project-personal detection respectively.
+	cur := filepath.Dir(abs)
+	for i := 0; i < 6; i++ { // bound: max 6 levels up
+		base := filepath.Base(cur)
+		if base == ".knowledge" || base == "memory" {
+			return cur, nil
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			break
+		}
+		cur = parent
+	}
+	return "", fmt.Errorf("no .knowledge or memory ancestor found: %s", abs)
 }
 
 // pendingFileName builds the canonical pending filename:

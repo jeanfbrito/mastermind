@@ -25,15 +25,25 @@ The heavy lifting (reading every commit, every file) was already done by Haiku d
 
 ### 1. Find all pending entries
 
-Glob for pending entries across all three scope roots:
+First, determine the **project root** — the git toplevel of the current working directory:
 
-```
-~/.knowledge/pending/*.md
-.knowledge/pending/*.md
-~/.claude/projects/*/memory/pending/*.md
+```bash
+git rev-parse --show-toplevel
 ```
 
-If empty, say "No pending entries to review" and stop.
+If this fails (not in a git repo), use the current working directory.
+
+Then glob for pending entries across all three scope roots using **absolute paths**. Relative globs like `.knowledge/pending/*.md` can fail to resolve depending on where the glob tool is anchored — always use absolute paths:
+
+```
+$HOME/.knowledge/pending/*.md                      (user-personal)
+<project_root>/.knowledge/pending/*.md             (project-shared)
+$HOME/.claude/projects/*/memory/pending/*.md       (project-personal)
+```
+
+**Do NOT skip the project-shared glob if the project root lookup fails** — fall back to globbing `.knowledge/pending/*.md` from the current working directory, and if that also returns nothing, try walking up from cwd looking for any `.knowledge/pending/` directory (bounded to 4 levels).
+
+If empty across ALL three scopes after trying all fallbacks, say "No pending entries to review" and stop.
 
 Otherwise report: "Found N pending entries. Verifying against sources..."
 
