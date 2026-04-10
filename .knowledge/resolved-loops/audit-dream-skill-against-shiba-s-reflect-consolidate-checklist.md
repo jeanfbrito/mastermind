@@ -12,6 +12,8 @@ kind: open-loop
 scope: project-shared
 category: consolidation
 confidence: high
+accessed: 1
+last_accessed: "2026-04-10"
 ---
 
 ## What's open
@@ -36,3 +38,7 @@ A clearer `/dream` skill spec that says what it does and what it deliberately re
 
 ## Source
 `docs/reference-notes/shiba-memory.md` §5, §8 item 5.
+
+## Resolution
+
+Audited 2026-04-10. Edited `~/.claude/skills/dream/SKILL.md` with four changes: (1) added explicit Scope section clarifying /dream operates on Claude Code auto-memory only, NOT on mastermind's .knowledge/ store or other independent project stores; (2) softened step 3 "Remove outdated items" to "Remove stale INDEX ENTRIES" (MEMORY.md is an index, removing a line never destroys content); (3) tightened step 6 "Clean up" to forbid deletion of non-empty files (merge or keep, don't drop); (4) added a "What /dream deliberately does NOT do" section documenting five refusals (no decay, no auto-link, no auto contradiction detection, no cross-project synthesis, no access-frequency decay) with rationale per item. Confirmed the current skill was already mostly correct — the audit surfaced clarifications and absences, not bugs. Documentation-only change, no code.
