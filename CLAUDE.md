@@ -30,12 +30,13 @@ cd51cfc Rename .mm to .knowledge + smart topic directories
 1. **[docs/CONTINUITY.md](docs/CONTINUITY.md)** — THE most important doc. The five load-bearing behaviors (session-start injection, session-close extraction, open-loops as first-class kind, guilt-free review, silent-unless-needed). Any work that doesn't honor these is the wrong work.
 2. **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — package layout, MCP tool surface, CLI subcommands, hook integration.
 3. **[docs/DECISIONS.md](docs/DECISIONS.md)** — why every architectural choice is what it is. Append-only. Read before proposing to change any "why."
-4. **[docs/ROADMAP.md](docs/ROADMAP.md)** — Phase 0 through Phase 6. Current phase: **Phase 2** (next to execute).
-5. **[docs/FORMAT.md](docs/FORMAT.md)** — the entry schema. **This is a long-term contract.** Do not change it casually — existing entries will need to keep parsing in 2034.
-6. **[docs/NON-GOALS.md](docs/NON-GOALS.md)** — things explicitly rejected. Read before proposing a new feature.
-7. **[docs/EXTRACTION.md](docs/EXTRACTION.md)** — the capture pipeline spec (Phase 3).
-8. **[docs/ARCHIVE.md](docs/ARCHIVE.md)** — working set vs lifelong archive.
-9. **[docs/REFERENCE-NOTES.md](docs/REFERENCE-NOTES.md)** — Phase 0 synthesis of the four reference repos. Appendix lives in `docs/reference-notes/`.
+4. **[docs/MEMORY-STACK.md](docs/MEMORY-STACK.md)** — the L0-L3 memory model with per-layer token budgets. L2 (`mm_search` trimmed excerpt) is enforced in code; L0/L1 budgets are documented-only for now.
+5. **[docs/ROADMAP.md](docs/ROADMAP.md)** — Phase 0 through Phase 6. Current phase: **Phase 2** (next to execute).
+6. **[docs/FORMAT.md](docs/FORMAT.md)** — the entry schema. **This is a long-term contract.** Do not change it casually — existing entries will need to keep parsing in 2034.
+7. **[docs/NON-GOALS.md](docs/NON-GOALS.md)** — things explicitly rejected. Read before proposing a new feature.
+8. **[docs/EXTRACTION.md](docs/EXTRACTION.md)** — the capture pipeline spec (Phase 3).
+9. **[docs/ARCHIVE.md](docs/ARCHIVE.md)** — working set vs lifelong archive.
+10. **[docs/REFERENCE-NOTES.md](docs/REFERENCE-NOTES.md)** — Phase 0 synthesis of the four reference repos. Appendix lives in `docs/reference-notes/`.
 
 ## Hard rules (non-negotiable)
 

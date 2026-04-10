@@ -120,6 +120,26 @@ memory across sessions, scoped per user/project. When you are helping
 the user with coding work, you should use these tools PROACTIVELY —
 not just when asked.
 
+## Memory stack (L0-L3)
+
+mastermind uses a four-layer memory model. Know which layer you're
+operating in to avoid flooding the context window.
+
+- L0 (always loaded, ~500 tokens): open-loop topics injected at
+  session start. Never call mm_search for open loops — they're already
+  in context.
+- L1 (always loaded, ~2000 tokens): project knowledge injected at
+  session start. Scan it before searching.
+- L2 (on-demand, ~200 tokens/result): mm_search DEFAULT. Returns
+  topic + first ## section + match-anchored excerpt per result. Use
+  this for broad sweeps and session-start queries.
+- L3 (explicit deep-dive, unbounded): either mm_search with
+  expand:true, or read the 'path' field from an L2 result with the
+  Read tool. Use when you need a complete entry.
+
+Default workflow: L1 (already in context) → L2 mm_search if needed
+→ L3 Read/expand only when you need the full text of a specific entry.
+
 ## Tools (four total, always available)
 
 ### mm_search
@@ -130,6 +150,9 @@ something they "solved before" or when you're about to attempt a
 pattern you suspect has been tried.
 
 Returns markdown with per-result sections the user can read directly.
+Default (expand omitted): L2 trimmed excerpt, ~200 tokens/result.
+With expand:true: L3 full body. Each result includes a 'path' field
+for direct file reads without re-searching.
 
 ### mm_write
 Write a candidate entry to the user's pending-review queue. Use when

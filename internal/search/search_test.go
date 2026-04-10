@@ -388,7 +388,7 @@ func TestKeywordSearcherIncludesPendingWhenRequested(t *testing.T) {
 // ─── format output ────────────────────────────────────────────────────
 
 func TestFormatResultsMarkdownEmpty(t *testing.T) {
-	out := FormatResultsMarkdown("electron", nil)
+	out := FormatResultsMarkdown("electron", nil, false)
 	if !strings.Contains(out, "0 results") {
 		t.Errorf("empty output missing count: %q", out)
 	}
@@ -427,7 +427,7 @@ func TestFormatResultsMarkdownHasPerResultHeadings(t *testing.T) {
 		},
 	}
 
-	out := FormatResultsMarkdown("macos", results)
+	out := FormatResultsMarkdown("macos", results, false)
 
 	// Top heading
 	if !strings.HasPrefix(out, "## mm_search:") {
@@ -446,25 +446,67 @@ func TestFormatResultsMarkdownHasPerResultHeadings(t *testing.T) {
 	if !strings.Contains(out, "[user-personal]") {
 		t.Errorf("scope label missing: %q", out)
 	}
-	// Body appears for the result that has one
+	// Body appears for the result that has one (short body → returned verbatim)
 	if !strings.Contains(out, "Short body.") {
 		t.Errorf("body excerpt missing: %q", out)
 	}
-}
-
-func TestExcerptShortBodyUnchanged(t *testing.T) {
-	body := "short body"
-	got := excerpt(body, 500)
-	if got != body {
-		t.Errorf("excerpt short body = %q, want %q", got, body)
+	// Path field must appear in the output
+	if !strings.Contains(out, "**path**:") {
+		t.Errorf("path field missing from result section: %q", out)
 	}
 }
 
-func TestExcerptLongBodyTruncated(t *testing.T) {
+func TestFormatResultsMarkdownExpandReturnsFullBody(t *testing.T) {
+	// Build a multi-line body well over shortBodyThreshold (800 chars).
+	// Use many lines so the match-anchored excerpt (±3 lines) is much
+	// shorter than the full body.
+	var sb strings.Builder
+	for i := 0; i < 60; i++ {
+		sb.WriteString("unrelated content line with distinct words to fill the body up\n")
+	}
+	longBody := strings.TrimRight(sb.String(), "\n")
+
+	results := []Result{
+		{
+			Ref: store.EntryRef{
+				Path:  "/tmp/user/lessons/long-entry.md",
+				Scope: format.ScopeUserPersonal,
+			},
+			Metadata: format.Metadata{
+				Date:  "2026-04-01",
+				Topic: "Long entry",
+				Kind:  format.KindLesson,
+			},
+			Body: longBody,
+		},
+	}
+
+	// expand=false with a matching query should trim to a context window
+	trimmed := FormatResultsMarkdown("content", results, false)
+	// expand=true should return full body
+	expanded := FormatResultsMarkdown("content", results, true)
+
+	if len(expanded) <= len(trimmed) {
+		t.Errorf("expand=true output (%d) should be longer than expand=false (%d)", len(expanded), len(trimmed))
+	}
+	if !strings.Contains(expanded, longBody) {
+		t.Error("expand=true output should contain full body verbatim")
+	}
+}
+
+func TestWordTrimShortBodyUnchanged(t *testing.T) {
+	body := "short body"
+	got := wordTrim(body, 500)
+	if got != body {
+		t.Errorf("wordTrim short body = %q, want %q", got, body)
+	}
+}
+
+func TestWordTrimLongBodyTruncated(t *testing.T) {
 	body := strings.Repeat("word ", 200) // 1000 chars
-	got := excerpt(body, 100)
+	got := wordTrim(body, 100)
 	if len(got) > 105 || !strings.HasSuffix(got, "…") {
-		t.Errorf("excerpt long body: len=%d, suffix=%q", len(got), got[max(0, len(got)-4):])
+		t.Errorf("wordTrim long body: len=%d, suffix=%q", len(got), got[max(0, len(got)-4):])
 	}
 }
 

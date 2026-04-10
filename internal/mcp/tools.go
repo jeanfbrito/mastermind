@@ -40,7 +40,20 @@ func (s *Server) registerTools() {
 const mmSearchDescription = `Search the user's persistent knowledge base across all scopes.
 Call at the start of any non-trivial task and whenever the user
 references prior work. Returns ranked markdown results with per-entry
-sections. Supports optional filters by scope, kind, project, and tags.`
+sections. Supports optional filters by scope, kind, project, and tags.
+
+Body verbosity is controlled by the expand field (L2/L3 in the
+mastermind memory stack):
+  - expand omitted or false (default, L2): returns topic + first ##
+    section + a match-anchored excerpt (~200 tokens per result). Each
+    result includes a 'path' field — pass it to the Read tool for the
+    full entry (L3) without re-searching.
+  - expand: true (L3): returns the full body verbatim. Use for deep
+    dives when you know you need complete content.
+
+Prefer the default (expand omitted) for session-start queries and
+broad topic sweeps. Use expand:true when you have a specific entry
+in mind and need its full text.`
 
 // SearchInput is the wire schema for mm_search. Fields are optional
 // except Query. Every field has a jsonschema tag so the SDK can
@@ -53,6 +66,7 @@ type SearchInput struct {
 	Tags           []string `json:"tags,omitempty" jsonschema:"optional tag filter; ALL listed tags must be present (AND semantics)"`
 	IncludePending bool     `json:"include_pending,omitempty" jsonschema:"if true, also search pending/ (unreviewed candidates); default false"`
 	Limit          int      `json:"limit,omitempty" jsonschema:"max results; default 10"`
+	Expand         bool     `json:"expand,omitempty" jsonschema:"if true, return full body (L3 deep dive); default false returns trimmed excerpt (L2)"`
 }
 
 // SearchOutput is the wire schema for mm_search results. The Markdown
@@ -86,7 +100,7 @@ func (s *Server) handleSearch(ctx context.Context, req *mcpsdk.CallToolRequest, 
 	}
 
 	return nil, SearchOutput{
-		Markdown: search.FormatResultsMarkdown(in.Query, results),
+		Markdown: search.FormatResultsMarkdown(in.Query, results, in.Expand),
 		Count:    len(results),
 	}, nil
 }
