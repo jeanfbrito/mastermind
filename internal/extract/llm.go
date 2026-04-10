@@ -58,18 +58,31 @@ func NewLLMExtractor(cfg Config) (*LLMExtractor, error) {
 }
 
 // extractionPrompt is the system prompt for LLM-based extraction.
+//
+// Design notes: the prompt deliberately does NOT ask the LLM for a "scope"
+// field. Scope is assigned by the caller in cmd/mastermind/main.go based on
+// the store configuration (project-shared when a project store exists, else
+// user-personal) — see internal/extract/extractor.go for the contract.
+//
+// The prompt is deliberately high-recall. The pending/ queue plus
+// /mm-review exist precisely so that false positives are cheap to prune
+// but missed lessons are impossible to recover. When in doubt, extract it.
 const extractionPrompt = `You are a knowledge extraction agent. Analyze the conversation transcript and extract every lesson, decision, pattern, insight, war-story, or open-loop worth preserving.
 
 For each extracted entry, return a JSON object with:
 - "topic": one-line summary (under 120 chars)
 - "kind": one of "lesson", "insight", "war-story", "decision", "pattern", "open-loop"
-- "body": 3-10 lines explaining what happened, why it matters, and the actionable takeaway
+- "body": at least 3 lines explaining what happened, why it matters, and the actionable takeaway. Use as many more lines as needed to capture the full context — do NOT compress or summarize, preserve the reasoning and any verbatim quotes that carry signal
 - "tags": 2-5 lowercase tags
 - "category": topic directory path, 1-2 segments (e.g., "go", "electron/ipc", "mcp")
 
 Return a JSON array of objects. If nothing worth extracting, return [].
-Be thorough — extract EVERYTHING worth remembering. Err on the side of capturing more.
-Do NOT extract trivial observations or restate what was done — focus on LESSONS and DECISIONS.`
+
+Open-loop signals to scan for: "I'll come back to this", "let me finish this later", "I should ask X about Y", "after the deploy I'll...", "remind me to...", "we still need to...", or any unresolved thread the user clearly intended to continue but didn't finish in this session. Open-loops are first-class — do not skip them because they feel incomplete, that IS the point of the kind.
+
+All six kinds matter equally. Do not de-prioritize insight, pattern, war-story, or open-loop in favor of decision and lesson — a missed pattern or war-story is just as lost as a missed decision.
+
+Be thorough — extract EVERYTHING worth remembering. When uncertain whether something is worth capturing, extract it. The pending review queue exists to prune false positives cheaply; a missed lesson cannot be recovered.`
 
 // Extract sends the transcript to the configured LLM and parses the
 // structured response into entries. Falls back to KeywordExtractor
