@@ -603,8 +603,9 @@ func runSuggest() error {
 	roots := []string{cfg.UserPersonalRoot, cfg.ProjectSharedRoot, cfg.ProjectPersonalRoot}
 
 	type topicMatch struct {
-		topic string
-		count int
+		dir      string // directory keyword that matched
+		count    int
+		topTopic string // topic from the best entry (most recent)
 	}
 	var matches []topicMatch
 	seen := make(map[string]bool)
@@ -616,14 +617,19 @@ func runSuggest() error {
 		seen[kw] = true
 
 		total := 0
+		var bestTopic string
 		for _, root := range roots {
 			if root == "" {
 				continue
 			}
-			total += countEntriesInDir(filepath.Join(root, kw))
+			dir := filepath.Join(root, kw)
+			total += countEntriesInDir(dir)
+			if bestTopic == "" {
+				bestTopic = bestEntryTopic(dir)
+			}
 		}
 		if total > 0 {
-			matches = append(matches, topicMatch{topic: kw, count: total})
+			matches = append(matches, topicMatch{dir: kw, count: total, topTopic: bestTopic})
 		}
 	}
 
@@ -631,9 +637,9 @@ func runSuggest() error {
 		return nil
 	}
 
-	// Debounce: skip if we suggested the same topics recently.
+	// Debounce: skip if we suggested the same file recently.
 	debounceFile := filepath.Join(os.TempDir(), "mastermind-suggest-debounce")
-	debounceKey := matches[0].topic
+	debounceKey := toolInput.FilePath
 	if data, err := os.ReadFile(debounceFile); err == nil {
 		parts := strings.SplitN(string(data), "|", 2)
 		if len(parts) == 2 && parts[1] == debounceKey {
@@ -646,16 +652,18 @@ func runSuggest() error {
 	}
 	_ = os.WriteFile(debounceFile, []byte(time.Now().Format(time.RFC3339)+"|"+debounceKey), 0o644)
 
-	// Format one-line nudge.
-	var parts []string
-	for _, m := range matches {
-		if len(parts) >= 3 {
-			break
+	// Format nudge with the top entry's topic for immediate context.
+	best := matches[0]
+	if best.topTopic != "" {
+		extra := best.count - 1
+		if extra > 0 {
+			fmt.Printf("_mastermind: \"%s\" + %d more in %q — consider mm_search._\n", best.topTopic, extra, best.dir)
+		} else {
+			fmt.Printf("_mastermind: \"%s\" — consider mm_search._\n", best.topTopic)
 		}
-		parts = append(parts, fmt.Sprintf("%q (%d entries)", m.topic, m.count))
+	} else {
+		fmt.Printf("_mastermind has knowledge about %q (%d entries) — consider mm_search._\n", best.dir, best.count)
 	}
-
-	fmt.Printf("_mastermind has knowledge about %s — consider mm_search._\n", strings.Join(parts, ", "))
 	return nil
 }
 
@@ -701,6 +709,45 @@ func countEntriesInDir(dir string) int {
 		return nil
 	})
 	return count
+}
+
+// bestEntryTopic reads the most recently modified .md file in dir and
+// returns its topic from frontmatter. Returns "" if the dir doesn't
+// exist, has no entries, or parsing fails. Designed to add <1ms to the
+// suggest path — reads one small file.
+func bestEntryTopic(dir string) string {
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() {
+		return ""
+	}
+
+	var bestPath string
+	var bestTime time.Time
+	filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".md") {
+			return nil
+		}
+		if fi, err := d.Info(); err == nil {
+			if bestPath == "" || fi.ModTime().After(bestTime) {
+				bestPath = path
+				bestTime = fi.ModTime()
+			}
+		}
+		return nil
+	})
+
+	if bestPath == "" {
+		return ""
+	}
+	data, err := os.ReadFile(bestPath)
+	if err != nil {
+		return ""
+	}
+	entry, err := format.Parse(data)
+	if err != nil {
+		return ""
+	}
+	return entry.Metadata.Topic
 }
 
 // sortByDateDesc sorts entry refs by date descending (newest first).
