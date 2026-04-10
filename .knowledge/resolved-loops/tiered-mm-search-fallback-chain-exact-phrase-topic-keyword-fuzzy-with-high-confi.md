@@ -13,6 +13,8 @@ kind: open-loop
 scope: project-shared
 category: search
 confidence: high
+accessed: 1
+last_accessed: "2026-04-10"
 ---
 
 ## What's open
@@ -33,3 +35,7 @@ Possibly unnecessary — the current combined ranker may already be good enough 
 
 ## Source
 Second-pass survey of soulforge. 4-tier fallback pattern from soulforge `docs/architecture.md`; conversation 2026-04-10.
+
+## Resolution
+
+Implemented 2026-04-10 in internal/search/search.go as a seven-class tier enum (classExactTopic through classFuzzy) with three-pass execution, short-circuit gated on earned access (access_count ≥ 3), sahilm/fuzzy as class 6 with 4-char length guard, and ACT-R fast-mode access boost. Mined engram + shiba-memory + mempalace before cutting code; full DECISIONS.md entry at 2026-04-10. 45 tests in internal/search (up from 17). See ARCHITECTURE.md "Retrieval flow" for the new tier table.
