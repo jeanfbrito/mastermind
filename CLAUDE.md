@@ -12,7 +12,7 @@ This is NOT a general-purpose memory tool. For that, use [engram](https://github
 
 ## Status
 
-**Phases 1-3 largely complete.** 148 tests passing across 7 Go packages, binary builds and runs. Actively dogfooding.
+**Phases 1-3 largely complete.** 164 tests passing across 7 Go packages, binary builds and runs. Actively dogfooding.
 
 Recent git log (most recent first):
 ```
@@ -93,7 +93,7 @@ make tidy         # go mod tidy
 make install      # copies bin/mastermind to ~/.local/bin/ (verify first)
 ```
 
-**Always run `make test` and `make vet` before committing.** 148 tests is the current baseline across 7 packages; if a commit lands with fewer, something got silently broken.
+**Always run `make test` and `make vet` before committing.** 164 tests is the current baseline across 7 packages; if a commit lands with fewer, something got silently broken.
 
 ## Git discipline (this repo specifically)
 
@@ -114,13 +114,13 @@ What's working:
 - **Access frequency scoring** — entries returned by mm_search track access counts, frequently useful entries rank higher
 - **LLM extraction** (optional) — set `MASTERMIND_EXTRACT_MODE=llm` for Haiku/Ollama-powered extraction
 - **`/mm-extract` skill** — manual extraction command for end-of-session capture
+- **`/mm-review` skill** — review pending entries one at a time (promote/reject/edit/skip)
+- **PostToolUse suggest** — surfaces the most relevant entry's topic when you Read/Edit/Write a file, with per-file debounce
 - ~35 real entries across `~/.knowledge/` and 3 project stores
 
 What's next:
-1. **PostToolUse proactive search** (Feature 3) — surface relevant knowledge after Read/Edit/Write calls. Deferred until PreCompact extraction is dogfooded.
-2. **`/mm-review` skill** — review pending entries from auto-extraction (promote/reject)
-3. **goreleaser + Homebrew** — binary distribution for people who don't have Go installed.
-4. **Phase 4 (archive tier)** and **Phase 5 (sync)** per ROADMAP.md
+1. **goreleaser + Homebrew** — binary distribution for people who don't have Go installed.
+2. **Phase 4 (archive tier)** and **Phase 5 (sync)** per ROADMAP.md
 
 ## Known limitations (worth remembering)
 
