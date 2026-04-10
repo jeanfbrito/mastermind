@@ -12,7 +12,7 @@ This is NOT a general-purpose memory tool. For that, use [engram](https://github
 
 ## Status
 
-**Phases 1-3 largely complete.** 110 tests passing across 7 Go packages, binary builds and runs. Actively dogfooding.
+**Phases 1-3 largely complete.** 148 tests passing across 7 Go packages, binary builds and runs. Actively dogfooding.
 
 Recent git log (most recent first):
 ```
@@ -93,7 +93,7 @@ make tidy         # go mod tidy
 make install      # copies bin/mastermind to ~/.local/bin/ (verify first)
 ```
 
-**Always run `make test` and `make vet` before committing.** 110 tests is the current baseline across 7 packages; if a commit lands with fewer, something got silently broken.
+**Always run `make test` and `make vet` before committing.** 148 tests is the current baseline across 7 packages; if a commit lands with fewer, something got silently broken.
 
 ## Git discipline (this repo specifically)
 
@@ -110,24 +110,22 @@ What's working:
 - All four MCP tools functional: `mm_search`, `mm_write`, `mm_promote`, `mm_close_loop`
 - **SessionStart hook** auto-injects open loops + project knowledge at session start
 - **PreCompact hook** auto-extracts knowledge from transcripts before context compression
-- **Auto-init** creates `.knowledge/` in git repos on first use (opt out: `MASTERMIND_NO_AUTO_INIT=1`)
+- **Auto-init** creates `.knowledge/` with `.gitignore` (excludes `pending/`) in git repos on first use (opt out: `MASTERMIND_NO_AUTO_INIT=1`)
 - **Access frequency scoring** — entries returned by mm_search track access counts, frequently useful entries rank higher
 - **LLM extraction** (optional) — set `MASTERMIND_EXTRACT_MODE=llm` for Haiku/Ollama-powered extraction
 - **`/mm-extract` skill** — manual extraction command for end-of-session capture
 - ~35 real entries across `~/.knowledge/` and 3 project stores
 
 What's next:
-1. **`.knowledge/` git strategy** — decide what gets committed vs gitignored (`.personal/`, `resolved-loops/`)
-2. **Tests for `internal/extract/`** — keyword extractor has real logic that should be locked down
-3. **PostToolUse proactive search** (Feature 3) — surface relevant knowledge after Read/Edit/Write calls. Deferred until PreCompact extraction is dogfooded.
-4. **`/mm-review` skill** — review pending entries from auto-extraction (promote/reject)
-5. **Phase 4 (archive tier)** and **Phase 5 (sync)** per ROADMAP.md
+1. **PostToolUse proactive search** (Feature 3) — surface relevant knowledge after Read/Edit/Write calls. Deferred until PreCompact extraction is dogfooded.
+2. **`/mm-review` skill** — review pending entries from auto-extraction (promote/reject)
+3. **goreleaser + Homebrew** — binary distribution for people who don't have Go installed.
+4. **Phase 4 (archive tier)** and **Phase 5 (sync)** per ROADMAP.md
 
 ## Known limitations (worth remembering)
 
 - **`PruneStale` errors are silently discarded** in `main.go` per the silent-unless-needed rule. Phase 6 should add a structured log at `~/.knowledge/logs/mastermind.log` with one line per prune error, still silent to the user but inspectable.
 - **`session-close` subcommand is still a stub.** PreCompact hook handles most of the extraction use case, but session-close could be useful for final cleanup.
-- **`internal/extract/` has no tests.** The keyword extractor has real regex logic and dedup that should be locked down with tests.
 - **Access tracking is synchronous** in search. Adds ~50ms for 10 results. Acceptable for current corpus sizes but worth monitoring.
 
 ## When you get stuck
