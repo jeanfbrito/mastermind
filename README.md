@@ -127,21 +127,23 @@ mastermind organizes knowledge into three scopes, all searched automatically:
 
 ## Skills (optional)
 
-mastermind ships two Claude Code slash commands for manual workflows:
+mastermind ships three Claude Code slash commands for manual workflows:
 
 | Skill | Trigger | Description |
 |-------|---------|-------------|
 | **mm-extract** | `/mm-extract` | Review the conversation and extract all lessons, decisions, patterns into mastermind |
 | **mm-review** | `/mm-review` | Review pending entries one at a time — promote, reject, edit, or skip |
+| **mm-discover** | `/mm-discover [git\|codebase\|all]` | Mine the codebase and git history for knowledge using Haiku subagents (near-zero cost) |
 
 Install by symlinking into your Claude Code skills directory:
 
 ```bash
 ln -s /path/to/mastermind/skills/mm-extract ~/.claude/skills/mm-extract
 ln -s /path/to/mastermind/skills/mm-review ~/.claude/skills/mm-review
+ln -s /path/to/mastermind/skills/mm-discover ~/.claude/skills/mm-discover
 ```
 
-These are optional — the hooks handle capture and retrieval automatically. Skills are for when you want manual control: extracting knowledge before session end, or reviewing what auto-extraction captured.
+These are optional — the hooks handle capture and retrieval automatically. Skills are for when you want manual control: extracting knowledge before session end, reviewing what auto-extraction captured, or seeding knowledge from an existing codebase.
 
 ## Entry format
 

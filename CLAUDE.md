@@ -115,6 +115,7 @@ What's working:
 - **LLM extraction** (optional) — set `MASTERMIND_EXTRACT_MODE=llm` for Haiku/Ollama-powered extraction
 - **`/mm-extract` skill** — manual extraction command for end-of-session capture
 - **`/mm-review` skill** — review pending entries one at a time (promote/reject/edit/skip)
+- **`/mm-discover` skill** — mine codebase + git history for knowledge using Haiku subagents (near-zero cost)
 - **PostToolUse suggest** — surfaces the most relevant entry's topic when you Read/Edit/Write a file, with per-file debounce
 - ~35 real entries across `~/.knowledge/` and 3 project stores
 
