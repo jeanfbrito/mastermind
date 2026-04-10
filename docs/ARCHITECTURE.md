@@ -109,12 +109,13 @@ Four tools total, forever. Adding a fifth requires a DECISIONS.md entry with a j
 
 ## CLI subcommands (non-MCP)
 
-Two subcommands are **not** MCP tools — they are CLI commands invoked by Claude Code hooks, outside the MCP protocol. They read/write the same store but run as short-lived subprocesses, not tool calls inside a running session.
+These subcommands are **not** MCP tools — they are CLI commands invoked by Claude Code hooks, outside the MCP protocol. They read/write the same store but run as short-lived subprocesses, not tool calls inside a running session.
 
-1. **`mastermind session-start --cwd <dir>`** — invoked by a Claude Code session-start hook. Walks up from `--cwd` to find the nearest `.knowledge/` (if any), queries all three scopes, assembles the continuity-injection block (open-loops, relevant lessons, pending count), and writes it to stdout for Claude Code to inject as system context. Must return in <200ms. If slow, returns nothing silently. See CONTINUITY.md.
-2. **`mastermind session-close --transcript <path>`** — invoked by a Claude Code session-close hook. Phase 1 (sync): validates and archives the transcript to `~/.knowledge/sessions/<timestamp>-<session-id>/`, forks a detached Phase 2 subprocess, returns immediately (<100ms target). Phase 2 (detached): loads the archived transcript, calls the extraction LLM, writes candidates to `<scope>/pending/`, logs telemetry. See EXTRACTION.md.
+1. **`mastermind session-start --cwd <dir>`** — invoked by a Claude Code SessionStart hook. Walks up from `--cwd` to find the nearest `.knowledge/` (if any), queries all three scopes, assembles the continuity-injection block (open-loops, relevant lessons, pending count), and writes it to stdout for Claude Code to inject as system context. Must return in <200ms. If slow, returns nothing silently. See CONTINUITY.md.
+2. **`mastermind post-compact [--cwd <dir>]`** — invoked by a Claude Code PostCompact hook. Fires after context compaction, when the agent has just lost most of its working memory. Re-injects a curated project-scoped slice (open loops from project-shared and project-personal only; top project knowledge entries) so the next turn starts oriented. Scope is narrower than session-start: user-personal open loops and the pending count are excluded — this is about re-hydrating the current project, not the full session picture. Reads hook JSON from stdin if present (cwd field), falls back to --cwd flag or os.Getwd(). Silent if nothing to surface.
+3. **`mastermind session-close --transcript <path>`** — invoked by a Claude Code session-close hook. Phase 1 (sync): validates and archives the transcript to `~/.knowledge/sessions/<timestamp>-<session-id>/`, forks a detached Phase 2 subprocess, returns immediately (<100ms target). Phase 2 (detached): loads the archived transcript, calls the extraction LLM, writes candidates to `<scope>/pending/`, logs telemetry. See EXTRACTION.md.
 
-These two subcommands are the load-bearing mechanism for the continuity layer. They convert mastermind from "a memory tool you use" into "a memory layer that runs silently." See CONTINUITY.md for why this distinction matters for the primary user.
+These subcommands are the load-bearing mechanism for the continuity layer. They convert mastermind from "a memory tool you use" into "a memory layer that runs silently." See CONTINUITY.md for why this distinction matters for the primary user.
 
 ## Slash commands (thin wrappers)
 
@@ -129,15 +130,27 @@ Slash commands live in Claude Code configuration, not in mastermind's binary. Ea
 
 ## Claude Code hook integration
 
-Mastermind depends on two Claude Code hooks being registered in the user's Claude Code config (`~/.claude/settings.json` or equivalent). The installation instructions live in the README and are a **one-time** setup cost — after that, the hooks run automatically, forever, with no further user action required. This is the load-bearing automation that eliminates the "remember to trigger the tool" failure mode.
+Mastermind depends on three Claude Code hooks being registered in the user's Claude Code config (`~/.claude/settings.json` or equivalent). The installation instructions live in the README and are a **one-time** setup cost — after that, the hooks run automatically, forever, with no further user action required. This is the load-bearing automation that eliminates the "remember to trigger the tool" failure mode.
 
-**session-start hook** (runs when Claude Code opens a session in a directory):
+**SessionStart hook** (runs when Claude Code opens a session in a directory):
 ```
 mastermind session-start --cwd "$PWD"
 ```
 Output (stdout) is injected as system context before the first user turn. Silent if no `.knowledge/` is found or all context sections are empty.
 
-**session-close hook** (runs when Claude Code closes a session):
+**PreCompact hook** (runs before Claude Code compresses the conversation context):
+```
+mastermind extract --from-hook
+```
+Reads hook JSON (transcript_path, cwd) from stdin. Extracts knowledge candidates into `<scope>/pending/`. Returns immediately. User sees nothing.
+
+**PostCompact hook** (runs after Claude Code compresses the conversation context):
+```
+mastermind post-compact
+```
+Reads hook JSON (cwd) from stdin if present. Re-injects project-scoped open loops and knowledge entries into the compressed context so the agent stays oriented. Output (stdout) is injected as system context. Silent if no project knowledge is found.
+
+**session-close hook** (not yet implemented — see Phase 3b in ROADMAP.md):
 ```
 mastermind session-close --transcript "$CLAUDE_TRANSCRIPT_PATH"
 ```
