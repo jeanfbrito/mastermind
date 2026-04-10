@@ -12,7 +12,7 @@ topic: 'Farzaa''s wiki-gen skill: architectural patterns worth borrowing for mas
 kind: insight
 scope: project-shared
 confidence: high
-accessed: 3
+accessed: 4
 last_accessed: "2026-04-10"
 ---
 
