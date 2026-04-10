@@ -445,3 +445,344 @@ func TestNewExtractor_LLMFallsBackToKeyword(t *testing.T) {
 		t.Errorf("LLM without key should fallback to KeywordExtractor, got %T", ext)
 	}
 }
+
+// ─── Decision patterns (soulforge WSM additions) ──────────────────────
+
+func TestExtract_DecisionIllUse(t *testing.T) {
+	transcript := "I'll use Postgres because it has better JSON support and ACID compliance."
+	k := &KeywordExtractor{ProjectName: "test"}
+	entries, err := k.Extract(transcript, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hasDecision := false
+	for _, e := range entries {
+		if e.Metadata.Kind == format.KindDecision {
+			hasDecision = true
+			if e.Metadata.Confidence != format.ConfidenceMedium {
+				t.Errorf("I'll use: confidence = %q, want medium", e.Metadata.Confidence)
+			}
+		}
+	}
+	if !hasDecision {
+		t.Error("expected decision entry for \"I'll use\"")
+	}
+}
+
+func TestExtract_DecisionIllGoWith(t *testing.T) {
+	transcript := "I'll go with the goroutine pool approach to cap memory usage."
+	k := &KeywordExtractor{ProjectName: "test"}
+	entries, err := k.Extract(transcript, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hasDecision := false
+	for _, e := range entries {
+		if e.Metadata.Kind == format.KindDecision {
+			hasDecision = true
+		}
+	}
+	if !hasDecision {
+		t.Error("expected decision entry for \"I'll go with\"")
+	}
+}
+
+func TestExtract_DecisionLetsUse(t *testing.T) {
+	transcript := "Let's use Redis for the session store — it's already in the stack."
+	k := &KeywordExtractor{ProjectName: "test"}
+	entries, err := k.Extract(transcript, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hasDecision := false
+	for _, e := range entries {
+		if e.Metadata.Kind == format.KindDecision {
+			hasDecision = true
+		}
+	}
+	if !hasDecision {
+		t.Error("expected decision entry for \"let's use\"")
+	}
+}
+
+func TestExtract_DecisionThePlanIs(t *testing.T) {
+	transcript := "The plan is to migrate the database schema in three stages to minimize downtime."
+	k := &KeywordExtractor{ProjectName: "test"}
+	entries, err := k.Extract(transcript, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hasDecision := false
+	for _, e := range entries {
+		if e.Metadata.Kind == format.KindDecision {
+			hasDecision = true
+		}
+	}
+	if !hasDecision {
+		t.Error("expected decision entry for \"the plan is\"")
+	}
+}
+
+func TestExtract_DecisionGoingTo_LowConfidence(t *testing.T) {
+	transcript := "We're going to refactor the auth module next sprint."
+	k := &KeywordExtractor{ProjectName: "test"}
+	entries, err := k.Extract(transcript, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Metadata.Kind == format.KindDecision {
+			if e.Metadata.Confidence != format.ConfidenceLow {
+				t.Errorf("going to: confidence = %q, want low", e.Metadata.Confidence)
+			}
+		}
+	}
+}
+
+func TestExtract_DecisionBecause_LowConfidence(t *testing.T) {
+	transcript := "We picked gRPC because it gives us bidirectional streaming out of the box."
+	k := &KeywordExtractor{ProjectName: "test"}
+	entries, err := k.Extract(transcript, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundBecauseLow := false
+	for _, e := range entries {
+		if e.Metadata.Kind == format.KindDecision && e.Metadata.Confidence == format.ConfidenceLow {
+			foundBecauseLow = true
+		}
+	}
+	if !foundBecauseLow {
+		t.Error("expected low-confidence decision entry for \"because\"")
+	}
+}
+
+// ─── Discovery / insight patterns (soulforge WSM additions) ───────────
+
+func TestExtract_InsightFoundThat(t *testing.T) {
+	transcript := "Found that the ORM was issuing a separate query for every nested association."
+	k := &KeywordExtractor{ProjectName: "test"}
+	entries, err := k.Extract(transcript, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hasInsight := false
+	for _, e := range entries {
+		if e.Metadata.Kind == format.KindInsight {
+			hasInsight = true
+			if e.Metadata.Confidence != format.ConfidenceMedium {
+				t.Errorf("found that: confidence = %q, want medium", e.Metadata.Confidence)
+			}
+		}
+	}
+	if !hasInsight {
+		t.Error("expected insight entry for \"found that\"")
+	}
+}
+
+func TestExtract_InsightTheIssueWas(t *testing.T) {
+	transcript := "The issue was that the lock was being held across the network call."
+	k := &KeywordExtractor{ProjectName: "test"}
+	entries, err := k.Extract(transcript, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hasInsight := false
+	for _, e := range entries {
+		if e.Metadata.Kind == format.KindInsight {
+			hasInsight = true
+		}
+	}
+	if !hasInsight {
+		t.Error("expected insight entry for \"the issue was\"")
+	}
+}
+
+func TestExtract_InsightDiscovered(t *testing.T) {
+	transcript := "I discovered that Go's http.Client does not timeout on slow response bodies by default."
+	k := &KeywordExtractor{ProjectName: "test"}
+	entries, err := k.Extract(transcript, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hasInsight := false
+	for _, e := range entries {
+		if e.Metadata.Kind == format.KindInsight {
+			hasInsight = true
+		}
+	}
+	if !hasInsight {
+		t.Error("expected insight entry for \"discovered\"")
+	}
+}
+
+func TestExtract_InsightItSeems_LowConfidence(t *testing.T) {
+	transcript := "It seems the garbage collector is running more frequently under load."
+	k := &KeywordExtractor{ProjectName: "test"}
+	entries, err := k.Extract(transcript, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundLow := false
+	for _, e := range entries {
+		if e.Metadata.Kind == format.KindInsight && e.Metadata.Confidence == format.ConfidenceLow {
+			foundLow = true
+		}
+	}
+	if !foundLow {
+		t.Error("expected low-confidence insight entry for \"it seems\"")
+	}
+}
+
+// ─── Case-insensitivity ───────────────────────────────────────────────
+
+func TestExtract_CaseInsensitive_Decision(t *testing.T) {
+	for _, phrase := range []string{
+		"I'LL USE gRPC for the new service.",
+		"I'll Use Postgres for persistence.",
+		"DECIDED TO switch to a message queue.",
+		"LET'S USE the stdlib http client here.",
+	} {
+		k := &KeywordExtractor{ProjectName: "test"}
+		entries, err := k.Extract(phrase, nil)
+		if err != nil {
+			t.Fatalf("phrase %q: %v", phrase, err)
+		}
+		found := false
+		for _, e := range entries {
+			if e.Metadata.Kind == format.KindDecision {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("case-insensitive match failed for %q", phrase)
+		}
+	}
+}
+
+func TestExtract_CaseInsensitive_Insight(t *testing.T) {
+	for _, phrase := range []string{
+		"FOUND THAT the index was missing on the foreign key column.",
+		"The Issue Was a race between the writer and the compaction goroutine.",
+		"DISCOVERED the cache was being evicted too aggressively.",
+	} {
+		k := &KeywordExtractor{ProjectName: "test"}
+		entries, err := k.Extract(phrase, nil)
+		if err != nil {
+			t.Fatalf("phrase %q: %v", phrase, err)
+		}
+		found := false
+		for _, e := range entries {
+			if e.Metadata.Kind == format.KindInsight {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("case-insensitive match failed for %q", phrase)
+		}
+	}
+}
+
+// ─── Word-boundary anchoring ──────────────────────────────────────────
+
+func TestExtract_WordBoundary_IllUse_NoFalsePositive(t *testing.T) {
+	// "I'll use" should NOT match inside words like "illustrate" or "illusive".
+	// These phrases don't contain the boundary-anchored pattern.
+	transcript := "The illusive bug turned out to be a simple off-by-one error."
+	k := &KeywordExtractor{ProjectName: "test"}
+	entries, err := k.Extract(transcript, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Metadata.Kind == format.KindDecision {
+			// A decision match here would mean the boundary check failed.
+			// The only reason a decision would match is "turned out" → lesson/insight
+			// not decision, so specifically check for I'll-use false positive via topic.
+			if strings.Contains(strings.ToLower(e.Metadata.Topic), "illusive") {
+				t.Errorf("word-boundary failed: matched 'illusive' as decision: %q", e.Metadata.Topic)
+			}
+		}
+	}
+}
+
+func TestExtract_WordBoundary_Discovered_NoFalsePositive(t *testing.T) {
+	// "undiscovered" should not match \bdiscovered\b.
+	transcript := "There are undiscovered edge cases in the parser that we should handle."
+	k := &KeywordExtractor{ProjectName: "test"}
+	entries, err := k.Extract(transcript, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Metadata.Kind == format.KindInsight && strings.Contains(strings.ToLower(e.Body), "undiscovered") {
+			// If the topic came from the "undiscovered" word specifically, that's a false positive.
+			// However, "we should" will also fire an open-loop on this line, so we only
+			// check that no insight has a topic derived purely from "undiscovered".
+			if strings.HasPrefix(strings.ToLower(e.Metadata.Topic), "undiscovered") {
+				t.Errorf("word-boundary failed: 'undiscovered' matched as insight: %q", e.Metadata.Topic)
+			}
+		}
+	}
+}
+
+// ─── Overlapping matches / dedup ──────────────────────────────────────
+
+func TestExtract_OverlappingPatterns_NoDuplicates(t *testing.T) {
+	// "I'll use Postgres because it's fast" matches both "I'll use" (decision/medium)
+	// and "because" (decision/low). The seen map should deduplicate — same topic,
+	// only one entry emitted (whichever pattern fires first wins).
+	transcript := "I'll use Postgres because it has better JSON support and ACID compliance."
+	k := &KeywordExtractor{ProjectName: "test"}
+	entries, err := k.Extract(transcript, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	topics := make(map[string]int)
+	for _, e := range entries {
+		topics[strings.ToLower(e.Metadata.Topic)]++
+	}
+	for topic, count := range topics {
+		if count > 1 {
+			t.Errorf("duplicate topic %q: appeared %d times", topic, count)
+		}
+	}
+}
+
+// ─── Multi-line paragraph context ────────────────────────────────────
+
+func TestExtract_MultiLineParagraphContext(t *testing.T) {
+	transcript := `We evaluated several options for the cache layer.
+Redis has pub/sub which we don't need right now.
+Memcached is simpler and faster for pure key-value.
+
+I'll use Memcached for the session store since we only need TTL expiry.
+
+We can always migrate to Redis if pub/sub becomes a requirement.`
+
+	k := &KeywordExtractor{ProjectName: "test"}
+	entries, err := k.Extract(transcript, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var decisionEntry *format.Entry
+	for i := range entries {
+		if entries[i].Metadata.Kind == format.KindDecision &&
+			strings.Contains(strings.ToLower(entries[i].Body), "memcached") {
+			decisionEntry = &entries[i]
+			break
+		}
+	}
+	if decisionEntry == nil {
+		t.Fatal("expected decision entry mentioning Memcached")
+	}
+	// Body should include surrounding context lines, not just the match line.
+	if !strings.Contains(decisionEntry.Body, "Memcached is simpler") {
+		t.Errorf("body missing pre-match context; got: %q", decisionEntry.Body)
+	}
+	if !strings.Contains(decisionEntry.Body, "always migrate") {
+		t.Errorf("body missing post-match context; got: %q", decisionEntry.Body)
+	}
+}
