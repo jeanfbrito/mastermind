@@ -30,5 +30,13 @@ Four extractor improvements bundled because they all touch `internal/extract/`:
 ## Why it matters
 All four are Phase 3 polish with zero schema impact. Items 1 and 3 are near-zero-effort wins. Item 2 is a meaningful refactor but directly validated by shiba's production design. Item 4 is a half-hour prompt audit.
 
+## Progress (2026-04-10)
+- **Item 1 (regex patterns): DONE.** Landed in commit `ac0ccd0` (branch) + `c7322f7` (merge). Nine WorkingStateManager patterns ported into `internal/extract/keyword.go` with tiered confidence (`I'll use` / `the plan is` / `found that` etc. at medium; `because` / `going to` / `it seems` at low). Threaded a new `confidence` field through the pattern struct. "we should" deliberately skipped as open-loop territory. 18 new tests.
+- **Item 4 (high-recall audit): DONE.** Landed in commit `2ee4442`. Removed the contradictory "do NOT extract trivial observations" clause, removed the 3-10 line body cap, added explicit open-loop signal phrase list, added "all six kinds matter equally", added design-note comment explaining why Scope is deliberately NOT in the LLM JSON schema. Audit agent proposed a scope-field addition which turned out to be wrong — the caller assigns scope in `cmd/mastermind/main.go:505-512`. Rejected that edit.
+- **Item 2 (specialized LLM sub-passes): STILL OPEN.** Not yet split. Precision win gated on observing the LLM backend actually being used in anger (default is keyword mode).
+- **Item 3 (gap-fill short-circuit): STILL OPEN.** Same gate as item 2 — only matters if LLM mode is the default.
+
+Loop stays open for items 2 and 3. They're both gated on LLM-mode usage; revisit when MASTERMIND_EXTRACT_MODE=llm becomes the common path.
+
 ## Source
 `docs/reference-notes/soulforge.md` §1, §5 items 1-2; `docs/reference-notes/shiba-memory.md` §3, §8 item 2.

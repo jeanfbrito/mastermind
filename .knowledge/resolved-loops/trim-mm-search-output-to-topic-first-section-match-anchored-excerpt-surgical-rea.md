@@ -36,3 +36,7 @@ Soulforge's "surgical reads" extract exact symbols from 500-line files instead o
 
 ## Source
 Second-pass survey of soulforge. Surgical-reads pattern from soulforge `docs/architecture.md`; conversation 2026-04-10.
+
+## Resolution
+
+Landed 2026-04-10 as internal/search/excerpt.go with BodyExcerpt() + expand escape hatch in mm_search input schema. Commits 038e028 (branch) + a253cde (merge). Benchmark: 323 → 151 tokens (53% savings) on a 1294-char war-story entry; ~860 tokens saved per session-start mm_search call. 12 new excerpt tests. Pairs with docs/MEMORY-STACK.md which documents the L2 budget this enforces. File path still emitted so callers can Read the full body for L3.

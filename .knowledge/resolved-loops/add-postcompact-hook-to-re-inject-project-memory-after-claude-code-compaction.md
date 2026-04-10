@@ -25,3 +25,7 @@ Add a `post-compact` subcommand to `cmd/mastermind/main.go` that runs the same c
 
 ## Source
 `docs/reference-notes/shiba-memory.md` §1 (hook table) and §8 item 1. Shiba ships all five Claude Code hooks (SessionStart + PostToolUse + Stop + PreCompact + PostCompact); mastermind ships only two.
+
+## Resolution
+
+Landed 2026-04-10 as `mastermind post-compact` subcommand. Commits 455517e (branch) + 73887f2 (merge). Reuses SessionStart injection helpers, scoped to project-shared + project-personal open-loops and project knowledge, omits pending count. 11 new tests (cmd/mastermind/post_compact_test.go). Users register in ~/.claude/settings.json manually (no auto-init template yet).

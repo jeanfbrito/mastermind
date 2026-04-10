@@ -58,5 +58,12 @@ Mastermind already has an implicit memory stack shaped exactly like MemPalace's 
 ## Why this deserves its own loop (vs. merging into the output-trimming loop)
 The L0/L1 budgets are about **SessionStart injection**, not `mm_search`. Different code path, different enforcement point, different proposed numbers. Keeping them separate keeps the scope of each loop clear. The output-trimming loop is the L2 half of this same hierarchy; this loop is the L0+L1 half.
 
+## Progress (2026-04-10)
+- **Documentation: DONE.** Landed in commit `038e028` (branch) + `a253cde` (merge) as `docs/MEMORY-STACK.md`. All four layers documented with soft budgets (L0=500, L1=2000, L2=200/result, L3=unbounded). Mapped to MemPalace's original table. Added to CLAUDE.md "Read these in order" list as item 4.
+- **L2 runtime enforcement: DONE.** Part of the same commit (the mm_search output-trim loop that closed alongside this one). `internal/search/excerpt.go` `BodyExcerpt` enforces the 200-tokens-per-result target by default, with `expand: true` as the L3 escape hatch. Benchmark: 53% token savings per result on a realistic war-story entry.
+- **L0/L1 runtime enforcement: STILL OPEN.** No token measurement or warning log in `cmd/mastermind/session-start` yet. Documented-only for now. Enforcement is gated on observing actual SessionStart injection bloat — at the current corpus size (~35 live entries + 10 open-loops) the budget is comfortably under-spent. Revisit when the corpus passes ~100 entries or when a session-start dump visibly pushes past the soft budgets.
+
+Loop stays open for the L0/L1 runtime enforcement half.
+
 ## Source
 `docs/reference-notes/mempalace.md` §3. MemPalace's own memory stack lives in their README's "The Memory Stack" section. Conversation 2026-04-10.
