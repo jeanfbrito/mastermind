@@ -220,18 +220,62 @@ The Go version minimum (`go 1.25`) was a concern briefly but we're already on 1.
 
 ---
 
-## 2026-04-09 — Test baseline update: 164 tests across 7 packages
+## 2026-04-10 — Test baseline update: 181 tests across 8 packages
 
-**Decision**: The current test baseline is **164 tests passing across 7 Go packages** (`internal/format`, `internal/store`, `internal/project`, `internal/search`, `internal/mcp`, `internal/extract`, and `cmd/mastermind`). This supersedes the Phase 1 baseline of 91 tests across 6 packages.
+**Decision**: The current test baseline is **181 tests passing across 8 Go packages** (`internal/format`, `internal/store`, `internal/project`, `internal/search`, `internal/mcp`, `internal/extract`, `internal/discover`, and `cmd/mastermind`). This supersedes the Phase 1 baseline of 91 tests across 6 packages.
 
 **What grew**:
-- `internal/extract`: 28 tests (new — keyword extractor patterns, deriveTopic, isDuplicate, parseExtractionResponse, NewExtractor factory)
-- `cmd/mastermind`: 16 tests added for suggest path (extractPathKeywords, countEntriesInDir, bestEntryTopic)
+- `internal/extract`: 28 tests (keyword extractor patterns, deriveTopic, isDuplicate, parseExtractionResponse, NewExtractor factory)
+- `cmd/mastermind`: 16 tests for the suggest path (extractPathKeywords, countEntriesInDir, bestEntryTopic)
+- `internal/discover`: 17 tests (parseResponse, collectKnownHashes, isDuplicate, findPackages)
 - Other packages grew incrementally through Phases 2-3
 
-**How to verify**: `make test` — all packages green and total count ≥ 164. `go test ./... -count=1 -v | grep -c '^=== RUN'` gives the exact count.
+**How to verify**: `make test` — all packages green and total count ≥ 181. `go test ./... -count=1 -v | grep -c '^=== RUN'` gives the exact count.
 
 **Consequence**: Same rule as Phase 1 — this number MUST only grow. If a commit lands with fewer, something got silently broken.
+
+---
+
+## 2026-04-10 — Autonomous discovery pipeline with model-verified review
+
+**Decision**: Add a two-stage autonomous knowledge discovery pipeline on top of the existing capture paths. Stage 1 is a cheap, broad scan using Haiku (or any OpenAI-compatible endpoint). Stage 2 is a precise, model-verified review that checks candidates against their source material.
+
+**The pipeline**:
+```
+Haiku scan (cheap, broad)       → pending/ (50 candidates)
+  ↓
+Session model verify (free)     → verified / rejected / ambiguous
+  ↓
+Human (only ambiguous)          → final decisions
+  ↓
+live/
+```
+
+**What's new**:
+1. **`/mm-discover` skill** + **`mastermind discover` CLI** — both invoke Haiku (Anthropic) or any OpenAI-compatible endpoint (Ollama, LM Studio, vLLM, Together.ai, Groq) to mine git history and/or source packages. Writes candidates to `pending/` with mandatory `## Source` sections (commit hashes for git, file paths for codebase).
+2. **`/mm-review` redesigned as verify-first** — the current session model (Opus/Sonnet) reads each candidate's `## Source`, fetches the actual commit or file, verifies the claim matches the source, and triages into auto-promote / auto-reject / escalate-to-human.
+3. **Entries as cursor, no state file** — `## Source` hashes in existing entries are the incremental cursor. Running discover again only processes new commits. Self-correcting: rejecting an entry in `/mm-review` makes its source commits eligible for re-analysis.
+
+**Rationale**: Knowledge should grow even when the user isn't actively working. A small cheap model (Haiku) can scan broadly without burning the budget. A bigger model (the session's Opus) can verify the curated output precisely — catching hallucinations that a human skimming titles would miss. The human only sees edge cases. This respects both the cost constraint and the ADHD design constraint (no burden when working memory is bad).
+
+**Why Haiku and not Opus for discovery**: cost at scale. Scanning 100 commits on Opus would be ~50x more expensive than on Haiku, and Haiku is perfectly capable of extracting straightforward lessons from diffs. The precision gap is closed by the verify step, which uses the session's existing Opus context (effectively free).
+
+**Why the session model verifies and not Haiku**: Haiku hallucinates. A second pass by a more capable model against the actual source material catches those hallucinations. Critically, the verifier only reads the 50 curated candidates plus their specific sources — not the full codebase — so its context stays small even on a 5000-commit repo.
+
+**What this reinforces**: the hard rule "auto-extracted entries go through pending/" still holds. `/mm-discover` writes to pending/, not live, because the LLM (not the user) authored the content. The verify step is the quality gate that makes auto-writes safe — hallucinations never reach live.
+
+**Files**:
+- `internal/discover/` — new Go package (llmclient.go, prompts.go, parse.go, discover.go, plus tests)
+- `cmd/mastermind/main.go` — new `discover` subcommand
+- `skills/mm-discover/SKILL.md` — Claude Code skill (Haiku subagents for orchestration)
+- `skills/mm-review/SKILL.md` — rewritten as verify-first triage
+- Env vars: `MASTERMIND_LLM_PROVIDER` (anthropic|openai), `MASTERMIND_LLM_BASE_URL`, `MASTERMIND_LLM_API_KEY`
+
+**Alternatives considered**:
+- *Write discover output directly to live*: rejected — auto-writes kill curated corpora (DECISIONS.md 2026-04-04). Haiku hallucinates; direct writes would pollute the store.
+- *Use Ollama-only API format*: rejected — OpenAI-compatible `/v1/chat/completions` works with everything (Ollama, LM Studio, vLLM, hosted providers), no vendor lock-in.
+- *Ask the human to review each candidate without verification*: rejected — human can't open every commit diff to verify Haiku's claims. The verification step is precisely the value a model adds over a human here.
+- *Single-stage Opus scan*: rejected — 50x more expensive, no benefit from the two-tier funnel.
 
 ---
 

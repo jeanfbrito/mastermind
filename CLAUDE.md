@@ -115,7 +115,7 @@ What's working:
 - **Access frequency scoring** — entries returned by mm_search track access counts, frequently useful entries rank higher
 - **LLM extraction** (optional) — set `MASTERMIND_EXTRACT_MODE=llm` for Haiku/Ollama-powered extraction
 - **`/mm-extract` skill** — manual extraction command for end-of-session capture
-- **`/mm-review` skill** — review pending entries one at a time (promote/reject/edit/skip)
+- **`/mm-review` skill** — verify-first triage: session model checks candidates against their ## Source commits/files, auto-promotes verified, auto-rejects hallucinations, escalates only ambiguous cases to the human
 - **`/mm-discover` skill** — mine codebase + git history for knowledge using Haiku subagents (near-zero cost)
 - **`mastermind discover` CLI** — standalone discovery (no Claude Code session needed), supports Anthropic + any OpenAI-compatible endpoint
 - **PostToolUse suggest** — surfaces the most relevant entry's topic when you Read/Edit/Write a file, with per-file debounce
