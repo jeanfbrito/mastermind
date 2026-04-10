@@ -13,7 +13,7 @@ Session starts
   → mastermind injects relevant knowledge + open loops (SessionStart hook)
 
 You work normally
-  → agent reads a file → mastermind nudges: "3 entries about electron — consider mm_search"
+  → agent reads a file → mastermind nudges: "DOMPurify strips details/summary by default" — consider mm_search
   → agent discovers something worth keeping → calls mm_write
 
 Context gets compressed
@@ -124,6 +124,24 @@ mastermind organizes knowledge into three scopes, all searched automatically:
 | **SessionStart** | Session opens | Injects open loops and project-relevant knowledge into the agent's context |
 | **PreCompact** | Before context compression | Extracts lessons from the conversation transcript into `pending/` |
 | **PostToolUse** | After Read, Edit, or Write | Nudges the agent when relevant knowledge exists for the file being touched |
+
+## Skills (optional)
+
+mastermind ships two Claude Code slash commands for manual workflows:
+
+| Skill | Trigger | Description |
+|-------|---------|-------------|
+| **mm-extract** | `/mm-extract` | Review the conversation and extract all lessons, decisions, patterns into mastermind |
+| **mm-review** | `/mm-review` | Review pending entries one at a time — promote, reject, edit, or skip |
+
+Install by symlinking into your Claude Code skills directory:
+
+```bash
+ln -s /path/to/mastermind/skills/mm-extract ~/.claude/skills/mm-extract
+ln -s /path/to/mastermind/skills/mm-review ~/.claude/skills/mm-review
+```
+
+These are optional — the hooks handle capture and retrieval automatically. Skills are for when you want manual control: extracting knowledge before session end, or reviewing what auto-extraction captured.
 
 ## Entry format
 
