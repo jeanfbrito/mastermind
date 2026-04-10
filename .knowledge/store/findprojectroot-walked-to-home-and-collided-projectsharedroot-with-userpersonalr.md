@@ -13,7 +13,7 @@ kind: war-story
 scope: project-shared
 category: store
 confidence: high
-accessed: 1
+accessed: 2
 last_accessed: "2026-04-10"
 ---
 

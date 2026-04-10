@@ -13,7 +13,7 @@ kind: open-loop
 scope: project-shared
 category: cli
 confidence: high
-accessed: 1
+accessed: 2
 last_accessed: "2026-04-10"
 ---
 

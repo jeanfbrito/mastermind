@@ -11,7 +11,7 @@ topic: store.DefaultConfig returns a skeleton — the caller must wire per-sessi
 kind: pattern
 scope: project-shared
 confidence: high
-accessed: 2
+accessed: 3
 last_accessed: "2026-04-10"
 ---
 
