@@ -83,6 +83,12 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "extract-audit":
+			if err := runExtractAudit(); err != nil {
+				fmt.Fprintf(os.Stderr, "mastermind extract-audit: %s\n", err)
+				os.Exit(1)
+			}
+			return
 		case "suggest":
 			if err := runSuggest(); err != nil {
 				fmt.Fprintf(os.Stderr, "mastermind suggest: %s\n", err)
@@ -581,12 +587,17 @@ func runExtract() error {
 		}
 	}
 
-	// Read the transcript.
+	// Read the transcript. NormalizeTranscript detects Claude Code
+	// JSONL and strips tool I/O down to prose; plain-text inputs are
+	// returned unchanged. This is a prerequisite for trustworthy
+	// extraction — raw JSONL feeds structural JSON into the keyword
+	// tier and explodes the false-positive rate. See the Phase 3
+	// polish audit in cmd/mastermind/extract_audit.go.
 	data, err := os.ReadFile(transcriptPath)
 	if err != nil {
 		return fmt.Errorf("read transcript: %w", err)
 	}
-	transcript := string(data)
+	transcript := extract.NormalizeTranscript(string(data))
 	if strings.TrimSpace(transcript) == "" {
 		return nil // nothing to extract
 	}
@@ -994,6 +1005,7 @@ Usage:
   mastermind post-compact       Claude Code PostCompact hook (re-injects project context after compaction)
   mastermind session-close      Claude Code session-close hook (phase 3b, not implemented)
   mastermind extract            Extract knowledge from a conversation transcript
+  mastermind extract-audit      Measure extractor recall/precision against a labeled corpus
   mastermind suggest            PostToolUse hook — nudge when knowledge exists for a file
   mastermind discover           Mine git history + codebase for knowledge (Haiku / OpenAI-compat)
   mastermind version            Print version and exit

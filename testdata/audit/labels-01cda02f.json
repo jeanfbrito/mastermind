@@ -1,0 +1,52 @@
+{
+  "id": "session-01cda02f",
+  "path": "/Users/jean/.claude/projects/-Users-jean-Github-mastermind/01cda02f-6bee-4821-a25f-913d6f7f9ccf.jsonl",
+  "description": "Planning session for Phase 3 extractor polish: picked audit harness as step 1 (measurement before mutation), defined corpus schema, dispatched labeling agent.",
+  "labels": [
+    {
+      "kind": "decision",
+      "key_phrase": "Audit harness first** (measurement before mutation)",
+      "notes": "Chose to build the audit harness before touching regex/LLM code — explicit rationale (can't iterate without a baseline)."
+    },
+    {
+      "kind": "pattern",
+      "key_phrase": "Without this, changes 2–4 are guesswork",
+      "notes": "Reusable heuristic: don't mutate extractor/ranker code without a measurement harness in place first."
+    },
+    {
+      "kind": "insight",
+      "key_phrase": "keyword tier is conservative, LLM tier is high-recall. Unresolved in code",
+      "notes": "Cross-cutting observation about tier tension in the extractor — a mental model worth preserving."
+    },
+    {
+      "kind": "lesson",
+      "key_phrase": "zero** for `llm.go`, zero integration tests, no real-session recall measurement",
+      "notes": "Concrete gap discovered by reading the extractor source — llm.go has no tests; worth remembering as a quality debt."
+    },
+    {
+      "kind": "decision",
+      "key_phrase": "(a) + labeled JSON checked in at `testdata/audit/corpus.json`",
+      "notes": "Architectural choice for the audit corpus location and format, with rationale (tool today, CI gating later)."
+    },
+    {
+      "kind": "pattern",
+      "key_phrase": "so I don't burn context reading JSONL",
+      "notes": "Heuristic: delegate large-file labeling/parsing to subagents instead of reading raw data into main context."
+    },
+    {
+      "kind": "open-loop",
+      "key_phrase": "Sub-passes** — only if audit shows a specific kind",
+      "notes": "Deferred work item: specialized LLM sub-passes are contingent on audit results — clearly a 'come back to this' thread."
+    },
+    {
+      "kind": "open-loop",
+      "key_phrase": "Tiered `mm_search` fallback chain",
+      "notes": "Runner-up work item surfaced but explicitly deferred in favor of extractor polish — a continuing thread."
+    },
+    {
+      "kind": "lesson",
+      "key_phrase": "Dead zones: errors without",
+      "notes": "Concrete list of regex coverage gaps in keyword.go — worth remembering when writing new patterns."
+    }
+  ]
+}

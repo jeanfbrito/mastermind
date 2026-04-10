@@ -1,0 +1,150 @@
+{
+  "transcripts": [
+    {
+      "id": "session-01cda02f",
+      "path": "transcripts/01cda02f-snapshot.jsonl",
+      "description": "Phase 3 extractor polish planning: audit harness as step 1, corpus schema, tier tension diagnosis",
+      "labels": [
+        {
+          "kind": "decision",
+          "key_phrase": "Audit harness first** (measurement before mutation)",
+          "tier": "llm",
+          "notes": "Chose to build the audit harness before touching regex/LLM code — explicit rationale (can't iterate without a baseline). Semantic decision: no signal-phrase marker in or near this phrase."
+        },
+        {
+          "kind": "pattern",
+          "key_phrase": "Without this, changes 2–4 are guesswork",
+          "tier": "llm",
+          "notes": "Reusable heuristic: don't mutate extractor/ranker code without a measurement harness in place first. Semantic — no regex signal phrase."
+        },
+        {
+          "kind": "insight",
+          "key_phrase": "keyword tier is conservative, LLM tier is high-recall. Unresolved in code",
+          "tier": "llm",
+          "notes": "Cross-cutting observation about tier tension in the extractor. Semantic — no 'realized/discovered/turns out' marker."
+        },
+        {
+          "kind": "lesson",
+          "key_phrase": "zero** for `llm.go`, zero integration tests, no real-session recall measurement",
+          "tier": "llm",
+          "notes": "Concrete quality-debt finding. No 'the fix was/root cause/lesson learned' signal — needs semantic reasoning to classify as a lesson."
+        },
+        {
+          "kind": "decision",
+          "key_phrase": "(a) + labeled JSON checked in at `testdata/audit/corpus.json`",
+          "tier": "llm",
+          "notes": "Architectural choice for audit corpus location and format. No decision signal phrase."
+        },
+        {
+          "kind": "pattern",
+          "key_phrase": "so I don't burn context reading JSONL",
+          "tier": "llm",
+          "notes": "Heuristic: delegate large-file labeling to subagents. No pattern signal phrase."
+        },
+        {
+          "kind": "open-loop",
+          "key_phrase": "Sub-passes** — only if audit shows a specific kind",
+          "tier": "llm",
+          "notes": "Deferred work contingent on audit. No 'come back to/TODO/we should' signal."
+        },
+        {
+          "kind": "open-loop",
+          "key_phrase": "Tiered `mm_search` fallback chain",
+          "tier": "llm",
+          "notes": "Runner-up work explicitly deferred. No open-loop signal phrase — context is 'lean was X, runner-up is Y'."
+        },
+        {
+          "kind": "lesson",
+          "key_phrase": "Dead zones: errors without",
+          "tier": "llm",
+          "notes": "Regex coverage gap list. No lesson signal phrase — requires semantic classification."
+        }
+      ]
+    },
+    {
+      "id": "session-1fcaee1c",
+      "path": "transcripts/1fcaee1c-snapshot.jsonl",
+      "description": "Phase 2 dogfooding session: wire all three scope roots, two load-bearing design reversals (auto-delete + forced-review), and rename .mm to .knowledge with tag-derived topic directories",
+      "labels": [
+        {
+          "kind": "war-story",
+          "tier": "keyword",
+          "key_phrase": "Root cause: `cmd/mastermind/main.go:runMCPServer` called `store.DefaultConfig()`",
+          "notes": "Signal 'root cause' (lesson list). The Phase 2 project-shared wiring bug surfaced by dogfooding mm_write — DefaultConfig never populated ProjectSharedRoot, so the MCP server could only see user-personal."
+        },
+        {
+          "kind": "lesson",
+          "tier": "keyword",
+          "key_phrase": "load-bearing design decisions that turned out to be wrong once real use surfaced",
+          "notes": "Signal 'turned out to be' (lesson list). Meta-lesson: auto-delete + forced review for user-initiated writes were design decisions that failed on first contact with dogfooding."
+        },
+        {
+          "kind": "war-story",
+          "tier": "keyword",
+          "key_phrase": "In six months with `.mm/` in 10 repos it's a painful migration",
+          "notes": "Signal 'painful' (war-story list). Framing the rename-now-vs-later cost — picked .knowledge over .mm before the migration cost compounds."
+        },
+        {
+          "kind": "insight",
+          "tier": "keyword",
+          "key_phrase": "Two tools writing to one dir with no coordination is a support nightmare",
+          "notes": "Signal 'nightmare' (war-story list). Insight driving the decision to NOT collocate ~/.claude/projects/<dir>/memory/ with Claude Code's own auto-memory."
+        },
+        {
+          "kind": "decision",
+          "tier": "keyword",
+          "key_phrase": "The framing question for this decision: *what happens when Jean clones mastermind on a second machine?*",
+          "notes": "Signal 'decision:' (decision list). Slug vs dash-encoded path for project-personal — chose slug (option b) for cross-machine continuity."
+        },
+        {
+          "kind": "insight",
+          "tier": "llm",
+          "key_phrase": "the agent doesn't have ADHD",
+          "notes": "No canonical signal phrase adjacent. Pivotal reframe: ADHD constraint applies to the human actor, not the agent — unlocks the topic-directory design."
+        },
+        {
+          "kind": "insight",
+          "tier": "llm",
+          "key_phrase": "auto-delete is the only irreversible failure",
+          "notes": "No canonical signal phrase adjacent. Severity framing that drove the PruneStale reversal — irreversible failures must not be a default."
+        },
+        {
+          "kind": "lesson",
+          "tier": "llm",
+          "key_phrase": "why am I making the user approve something they just asked for",
+          "notes": "No canonical signal phrase. Forcing question that surfaced the mm_write-to-live design reversal (user-initiated writes bypass pending)."
+        },
+        {
+          "kind": "decision",
+          "tier": "llm",
+          "key_phrase": "Option (b) — `project.Detect` slug.** Clearly the right call",
+          "notes": "Decision framing 'Clearly the right call' is not on the canonical list. Cross-machine continuity dictated slug over dash-encoded cwd path."
+        },
+        {
+          "kind": "pattern",
+          "tier": "llm",
+          "key_phrase": "first tag becomes the directory",
+          "notes": "No canonical signal phrase. The deterministic attractor rule for store-side topic resolution — agent provides tags, store derives directory."
+        },
+        {
+          "kind": "insight",
+          "tier": "llm",
+          "key_phrase": "The directory structure is a **browsing layer**, not the retrieval layer",
+          "notes": "No canonical signal phrase. Architectural separation: directory tree is for humans, frontmatter+search is for machines — the two layers are independent."
+        },
+        {
+          "kind": "open-loop",
+          "tier": "llm",
+          "key_phrase": "reserve a `MASTERMIND_PROJECT_DIR` env var for the rare case",
+          "notes": "No canonical open-loop signal phrase adjacent. Explicit YAGNI deferral for the slug-collision edge case (two unrelated projects normalizing to the same name)."
+        },
+        {
+          "kind": "decision",
+          "tier": "llm",
+          "key_phrase": "split the confusing `invalid or unconfigured scope` error in `store.Write` into two distinct messages",
+          "notes": "No canonical signal phrase adjacent. Post-bug polish decision: distinguish unknown-scope from known-scope-without-root, locked with an invariant test."
+        }
+      ]
+    }
+  ]
+}
