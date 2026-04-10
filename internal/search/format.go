@@ -31,12 +31,20 @@ import (
 //	**topic**: <topic>
 //	**tags**: tag1, tag2, tag3
 //	**project**: <project>
+//	**path**: /absolute/path/to/entry.md
 //
-//	<body excerpt, first ~500 chars>
+//	<body — trimmed to topic+first-section+match-excerpt by default,
+//	         full body when expand=true>
 //
 // A header per result is critical — it's what context-mode's chunker
 // uses to separate sections.
-func FormatResultsMarkdown(query string, results []Result) string {
+//
+// The expand flag controls body verbosity:
+//   - false (default, L2): topic + first ## section + match-anchored
+//     excerpt. Caller can Read the path for full content (L3).
+//   - true: full body returned verbatim. Use for deep-dive queries
+//     or when the caller knows it needs the complete entry.
+func FormatResultsMarkdown(query string, results []Result, expand bool) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "## mm_search: %q — %d result", query, len(results))
 	if len(results) != 1 {
@@ -50,7 +58,7 @@ func FormatResultsMarkdown(query string, results []Result) string {
 	}
 
 	for _, r := range results {
-		writeResultSection(&b, r)
+		writeResultSection(&b, r, query, expand)
 	}
 	return b.String()
 }
@@ -58,7 +66,11 @@ func FormatResultsMarkdown(query string, results []Result) string {
 // writeResultSection renders a single result block. Each block starts
 // with an H3 so context-mode's markdown chunker treats it as its own
 // indexable section.
-func writeResultSection(b *strings.Builder, r Result) {
+//
+// Body verbosity is controlled by expand:
+//   - false → BodyExcerpt (L2: topic+section+match window, ≤~200 tokens)
+//   - true  → full body verbatim (L3: unbounded)
+func writeResultSection(b *strings.Builder, r Result, query string, expand bool) {
 	slug := filepath.Base(r.Ref.Path)
 	slug = strings.TrimSuffix(slug, ".md")
 
@@ -75,28 +87,22 @@ func writeResultSection(b *strings.Builder, r Result) {
 	if r.Metadata.Project != "" {
 		fmt.Fprintf(b, "**project**: %s\n", r.Metadata.Project)
 	}
+	// Always include the path so callers can Read the full file (L3)
+	// without needing to re-search.
+	if r.Ref.Path != "" {
+		fmt.Fprintf(b, "**path**: %s\n", r.Ref.Path)
+	}
 	b.WriteByte('\n')
 
 	body := strings.TrimSpace(r.Body)
 	if body != "" {
-		b.WriteString(excerpt(body, 500))
+		var bodyText string
+		if expand {
+			bodyText = body
+		} else {
+			bodyText = BodyExcerpt(body, query)
+		}
+		b.WriteString(bodyText)
 		b.WriteString("\n\n")
 	}
-}
-
-// excerpt returns the first N characters of body, broken at a word
-// boundary if possible. If body is shorter than n, returns it verbatim.
-// Appends an ellipsis only if truncation actually happened.
-func excerpt(body string, n int) string {
-	body = strings.TrimSpace(body)
-	if len(body) <= n {
-		return body
-	}
-	// Truncate at n, then back up to the last whitespace to avoid
-	// cutting a word in half.
-	cut := body[:n]
-	if idx := strings.LastIndexAny(cut, " \t\n"); idx > n/2 {
-		cut = cut[:idx]
-	}
-	return strings.TrimRight(cut, " \t\n") + "…"
 }
