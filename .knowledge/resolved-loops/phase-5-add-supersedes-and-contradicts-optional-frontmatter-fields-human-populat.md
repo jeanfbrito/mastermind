@@ -80,3 +80,7 @@ Default link strength is 1.0 (not stored — binary presence). One link: 1.2×. 
 5. `/mm-review` skill — when a candidate's body text contains phrases like "replaces", "supersedes", "contradicts" OR when topic-string overlap with a live entry exceeds a threshold, prompt the human to populate the relation. No automatic population.
 
 References: `docs/reference-notes/shiba-memory.md` §2, mining report 2026-04-10 (Agent a06eeb60 — knowledge-graph relations), shiba-memory `schema/001_init.sql:63`, `007_actr_proper.sql:121`, `cli/src/commands/link.ts:9-24`.
+
+## Resolution
+
+Shipped 2026-04-10. Added Supersedes + Contradicts []string fields to format.Metadata as optional additive schema extension. Implemented the critical divergence from shiba-memory: supersedes contributes to a within-class score multiplier (capped at 3 links), but contradicts does NOT boost — it triggers co-retrieval, pulling the listed slugs into the output with a "(contradicts <topic>)" annotation regardless of their own keyword score. This honors hard rule #7 (knowledge never silently overridden) by keeping tensions visible rather than letting score math bury them. Dangling slugs tolerated. 8 new tests across internal/format/relations_test.go and internal/search/relations_test.go. FORMAT.md additive extension documented. /mm-review skill integration and PageRank follow-on both deferred as separate open loops (one now unblocked).
