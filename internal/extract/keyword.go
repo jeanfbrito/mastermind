@@ -23,6 +23,20 @@ type pattern struct {
 	confidence format.Confidence
 }
 
+// fillerPattern matches assistant-turn lines that open with filler /
+// acknowledgment phrases ("ok", "sure", "let me", "here's", etc.).
+// These lines almost never contain real decision/discovery content,
+// but they can incidentally trigger low-precision patterns like
+// "going to" or "because". Skipping them before the main pattern
+// sweep is a zero-cost precision improvement. Borrowed from
+// soulforge's isSubstantive() filter (see docs/DECISIONS.md).
+//
+// Anchored to the start of the line (after optional whitespace)
+// and followed by a word boundary so the prefix can't match inside
+// legitimate content ("I'll now use X" is filler; "we'll now"
+// is not).
+var fillerPattern = regexp.MustCompile(`(?i)^\s*(?:ok|sure|let me|i'?ll now|here'?s|looking at|alright|got it|understood|let's see|sounds good|on it)\b`)
+
 // patterns are compiled once and reused across extractions. Each
 // pattern matches a signal phrase that commonly appears when someone
 // discovers, decides, or resolves something.
@@ -116,8 +130,22 @@ func (k *KeywordExtractor) Extract(transcript string, existingTopics []string) (
 		existingLower[strings.ToLower(t)] = true
 	}
 
+	// Precompute filler-line skip mask so the check runs once per line
+	// instead of once per (pattern × line) pair. Any line that opens
+	// with a filler phrase is dropped from the per-pattern match loop
+	// below without ever hitting a decision/discovery regex.
+	skipLine := make([]bool, len(lines))
+	for i, line := range lines {
+		if fillerPattern.MatchString(line) {
+			skipLine[i] = true
+		}
+	}
+
 	for _, pat := range patterns {
 		for i, line := range lines {
+			if skipLine[i] {
+				continue
+			}
 			if !pat.re.MatchString(line) {
 				continue
 			}

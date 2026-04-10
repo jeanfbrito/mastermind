@@ -471,6 +471,52 @@ Convergent validation from shiba-memory (`002_profiles_scoping.sql:129-133`): sh
 
 ---
 
+## 2026-04-10 — Extraction quality bundle (filler filter + session timestamp + gap-fill skip)
+
+**Decision**: Three small improvements to `internal/extract/` land together as one logical change. Each was filed as a separate open loop after the 2026-04-10 reference-repo mining pass; they're bundled because they touch adjacent code and share ordering constraints.
+
+### 1. Filler-line filter (keyword.go)
+
+`keyword.go` now precomputes a `skipLine []bool` mask before the pattern sweep. Any line that opens with a filler phrase — `ok`, `sure`, `let me`, `i'll now`, `here's`, `looking at`, `alright`, `got it`, `understood`, `let's see`, `sounds good`, `on it` — is dropped from the per-pattern match loop. Borrowed from soulforge's `isSubstantive()` filter. The mask is hoisted outside the outer `patterns` loop so the filler regex runs O(lines) instead of O(lines × patterns).
+
+Anchored to start-of-line (`^\s*`) with a word boundary so the filter can't match inside legitimate content. `I'll use Redis because it's faster` is NOT filler; `Let me use Redis because it's faster` IS filler because the opener carries no signal and the "because" decision match is spurious.
+
+### 2. Session-timestamp header (llm.go)
+
+LLM extraction now prepends `Session time: 2026-04-10 (Monday)\n\n` to the transcript before the provider switch (Anthropic/Ollama/OpenAI). Borrowed from OpenViking's `session/memory/session_extract_context_provider.py` extraction prompt structure. Purpose: ground relative temporal references — "tomorrow", "next sprint", "by end of month" — against today's date so extracted open-loops and events have accurate `date` fields.
+
+Cost is ~15 characters. Wall-clock source is indirected via a `sessionNow` package var so tests can freeze time without patching `time.Now` globally.
+
+### 3. LLM gap-fill skip (llm.go)
+
+`LLMExtractor.Extract()` now always runs the keyword tier first (the LLMExtractor already held a `KeywordExtractor` instance for fallback purposes; the new behavior promotes it from fallback to first-pass). If the keyword tier returns at least `GapFillThreshold` entries (default 5, configurable in `Config`), the LLM call is skipped entirely and the keyword results are returned directly.
+
+Borrowed from soulforge's `buildV2Summary()` threshold pattern (skip LLM gap-fill when slot count ≥ 15). Same principle: high-signal sessions often produce enough rule-based matches that paying API cost to re-extract the same signals is wasteful. The LLM tier becomes free on high-signal sessions and retains its value on thin transcripts.
+
+Side benefit: the fallback path (LLM error, `Strict=false`) now returns the cached keyword entries from pass 1 instead of re-running keyword extraction. One less duplicated regex pass.
+
+**Config**: new `Config.GapFillThreshold int`. Default `5` in `DefaultConfig()`. Zero disables the skip (preserves pre-2026-04-10 behavior). Not exposed to the CLI or config file yet — the default is conservative enough that tuning can wait for dogfooding signal.
+
+**Ordering constraint**: filler filter must land before gap-fill skip. Without the filter, the keyword tier overcounts filler lines and the gap-fill threshold can fire on spurious matches. Landing them together in one commit avoids any intermediate state where the threshold is tripped by noise.
+
+**Test coverage** (7 new tests in `internal/extract/item_b_test.go`):
+- `TestFillerPattern_MatchesCommonOpeners` — regex matrix: 18 cases covering openers that should match + legitimate content that should not.
+- `TestKeywordExtractor_SkipsFillerLines` — integration: `Let me use X because Y` produces zero entries (filler filter blocks the `because` decision pattern).
+- `TestKeywordExtractor_FillerFilterDoesNotHurtRealContent` — regression guard: real decision/fix/plan lines still produce entries.
+- `TestSessionTimestampHeader_Format` — deterministic format via frozen `sessionNow`.
+- `TestSessionTimestampHeader_RealClockNotZero` — prefix/suffix sanity with the real clock.
+- `TestLLMExtractor_GapFillSkipWhenKeywordRich` — LLM is never called when keyword tier returns ≥ 5 entries (verified by pointing at `http://127.0.0.1:1/v1` — a guaranteed connection-refused endpoint — and asserting no error).
+- `TestLLMExtractor_GapFillThresholdZeroDisablesSkip` — threshold 0 means always call the LLM (then fall back to keyword on the unreachable endpoint under `Strict=false`).
+
+**Verification**: full suite passes. `extract-audit` corpus was not run as part of this commit because the improvements are structural (filter/reorder/header) rather than new match patterns — no recall/precision shift expected on existing labeled signals. A separate audit pass should confirm this once the next corpus update lands.
+
+**What was rejected**:
+- **Filler filter as a per-pattern check** (inside the inner loop instead of hoisted): simpler but O(lines × patterns) regex evals vs. O(lines). The hoist is a free perf win.
+- **Session timestamp as a system-prompt addition** (put it in `extractionPrompt` instead of prepending to transcript): the system prompt is static at compile time; injecting `time.Now()` would require a dynamic prompt builder and touch three `call*` functions. Prepending to the transcript is one line in `Extract()`.
+- **Gap-fill skip with a separate `keyword_first` mode**: considered exposing this as a new `Mode` value. Rejected — it's not a different backend, it's an optimization on the existing LLM backend. The threshold config suffices.
+
+---
+
 ## TBD — project-personal sync strategy
 
 **Status**: Open.

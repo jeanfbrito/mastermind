@@ -69,16 +69,26 @@ type Config struct {
 	// ProjectName is the detected project name, used to set the project
 	// field on extracted entries.
 	ProjectName string
+
+	// GapFillThreshold controls the LLM gap-fill skip. When LLMExtractor
+	// runs, it first invokes the embedded KeywordExtractor; if the
+	// keyword tier returns >= GapFillThreshold entries, the LLM call is
+	// skipped entirely (the rule-based tier was already rich enough).
+	// Zero means "always run the LLM", which is the pre-2026-04-10
+	// behavior. Borrowed from soulforge's compaction-v2 threshold
+	// pattern; see DECISIONS.md for the mining-pass rationale.
+	GapFillThreshold int
 }
 
 // DefaultConfig returns a Config with sensible defaults.
 // All fields can be overridden via environment variables.
 func DefaultConfig() Config {
 	return Config{
-		Mode:        "keyword",
-		LLMProvider: "anthropic",
-		LLMModel:    "",
-		OllamaURL:   "http://localhost:11434",
+		Mode:             "keyword",
+		LLMProvider:      "anthropic",
+		LLMModel:         "",
+		OllamaURL:        "http://localhost:11434",
+		GapFillThreshold: 5,
 	}
 }
 

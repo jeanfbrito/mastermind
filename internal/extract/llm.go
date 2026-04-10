@@ -108,6 +108,14 @@ CRITICAL: source_quote is mandatory and must be VERBATIM. Downstream systems mat
 // Extract sends the transcript to the configured LLM and parses the
 // structured response into entries. Falls back to KeywordExtractor
 // on any error (unless Strict is set on the config).
+//
+// Gap-fill skip (2026-04-10): the keyword tier always runs first,
+// regardless of Mode. If it returns at least GapFillThreshold
+// entries, the LLM call is skipped entirely — the rule-based tier
+// was already rich enough, and paying API cost to re-extract the
+// same signals is wasteful. Threshold defaults to 5 (see
+// DefaultConfig); zero disables the skip. Borrowed from soulforge's
+// compaction-v2 buildV2Summary pattern — see DECISIONS.md.
 func (l *LLMExtractor) Extract(transcript string, existingTopics []string) ([]format.Entry, error) {
 	// Truncate transcript if too long for the model. 400000 chars is
 	// roughly 100k tokens, which fits comfortably inside a 256k
@@ -118,6 +126,20 @@ func (l *LLMExtractor) Extract(transcript string, existingTopics []string) ([]fo
 	if len(transcript) > 400000 {
 		transcript = transcript[:400000]
 	}
+
+	// Pass 1: keyword tier always runs first. If it's already rich
+	// enough, return without touching the LLM.
+	kwEntries, kwErr := l.keyword.Extract(transcript, existingTopics)
+	if kwErr == nil && l.cfg.GapFillThreshold > 0 && len(kwEntries) >= l.cfg.GapFillThreshold {
+		return kwEntries, nil
+	}
+
+	// Pass 2: LLM. Prepend a session-timestamp header so the model
+	// can correctly ground relative temporal references ("tomorrow",
+	// "next sprint", "by end of month") against today's date.
+	// Borrowed from OpenViking's extraction prompt structure — see
+	// docs/reference-notes/openviking.md and DECISIONS.md.
+	transcript = sessionTimestampHeader() + transcript
 
 	var rawJSON string
 	var err error
@@ -135,8 +157,13 @@ func (l *LLMExtractor) Extract(transcript string, existingTopics []string) ([]fo
 		if l.cfg.Strict {
 			return nil, fmt.Errorf("llm call failed: %w", err)
 		}
-		// Fall back to keyword extraction.
-		return l.keyword.Extract(transcript, existingTopics)
+		// Fall back to the already-computed keyword results.
+		// kwErr may be non-nil; pass it through so the caller sees
+		// the root cause if BOTH paths failed.
+		if kwErr != nil {
+			return nil, kwErr
+		}
+		return kwEntries, nil
 	}
 
 	entries, err := parseExtractionResponse(rawJSON, l.cfg.ProjectName, existingTopics)
@@ -150,11 +177,32 @@ func (l *LLMExtractor) Extract(transcript string, existingTopics []string) ([]fo
 			_ = os.WriteFile(dump, []byte(rawJSON), 0o644)
 			return nil, fmt.Errorf("llm response parse failed (full raw saved to %s, %d bytes): %w", dump, len(rawJSON), err)
 		}
-		return l.keyword.Extract(transcript, existingTopics)
+		if kwErr != nil {
+			return nil, kwErr
+		}
+		return kwEntries, nil
 	}
 
 	return entries, nil
 }
+
+// sessionTimestampHeader returns a one-line header that grounds the
+// LLM in today's date. Prepended to the transcript in Extract so the
+// model can resolve relative temporal references correctly. The
+// format matches OpenViking's extraction prompt anchor:
+//
+//	Session time: 2026-04-10 (Monday)
+//
+// Unit tests that want deterministic output can override this via
+// the sessionNowForTest hook (kept in the test file).
+func sessionTimestampHeader() string {
+	return fmt.Sprintf("Session time: %s\n\n", sessionNow().Format("2006-01-02 (Monday)"))
+}
+
+// sessionNow is the wall-clock source for sessionTimestampHeader.
+// Indirected through a package-level var so tests can freeze time
+// without patching time.Now globally. Production value is time.Now.
+var sessionNow = time.Now
 
 // callAnthropic sends the transcript to the Anthropic Messages API.
 func (l *LLMExtractor) callAnthropic(transcript string) (string, error) {
