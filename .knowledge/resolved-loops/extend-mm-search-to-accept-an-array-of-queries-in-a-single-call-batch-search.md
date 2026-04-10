@@ -13,7 +13,7 @@ kind: open-loop
 scope: project-shared
 category: search
 confidence: high
-accessed: 1
+accessed: 2
 last_accessed: "2026-04-10"
 ---
 
@@ -34,3 +34,7 @@ Keep the single-query path free of overhead. Do NOT hide the batch API behind an
 
 ## Source
 Second-pass survey of soulforge (`~/Github/soulforge`) against mastermind's tool surface. Soulforge `docs/compound-tools.md`; conversation 2026-04-10.
+
+## Resolution
+
+Shipped 2026-04-10. Added optional `queries: []string` to mm_search MCP input alongside the existing `query: string` (exactly one required, runtime-validated). Each query runs through the full tiered fallback pipeline independently; filters apply uniformly; per-query results concatenated with distinct `## mm_search: "<query>"` H2 headings in the markdown output. Backward compatible — single-query callers see byte-identical output. 4 new tests in internal/mcp/mcp_test.go. Full rationale in docs/DECISIONS.md 2026-04-10 entry.
