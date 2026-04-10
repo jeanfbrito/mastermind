@@ -202,6 +202,8 @@ Inside a single class, `score` breaks ties. Score is the additive sum of:
 
 The 0.5 access-boost cap preserves the load-bearing invariant that a single topic hit (2.0) strictly dominates any combination of tag + body + access boost within the same class.
 
+**Project-boost multiplier** (2026-04-10): after all additive components, the final within-class score is multiplied by `projectMultiplier(Query.Project, entry.Project)` — **1.3×** for same-project entries, **1.0×** for `general` or unset entries, **0.8×** for cross-project entries. When `Query.Project` is empty, every entry gets 1.0× (boost disabled). The multiplier is strictly within-class: a cross-project class-3 hit still dominates a same-project class-5 hit because class is the primary sort key. `Query.StrictProject: true` restores the pre-2026-04-10 hard-filter behavior for callers that genuinely want only-this-project results. See DECISIONS.md for the filter-to-multiplier refactor rationale.
+
 ### Three-pass execution
 
 - **Pass 1** (metadata-only, no body I/O): handles classes 0, 1, 3, 4. Every ref is tested against topic and tag strings only.

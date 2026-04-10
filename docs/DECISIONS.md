@@ -431,6 +431,46 @@ Three reference repos were mined before the design was finalized (see reference-
 
 ---
 
+## 2026-04-10 — Project filter becomes a soft ranking multiplier
+
+**Decision**: `Query.Project` in `internal/search/search.go` is no longer a hard filter on the corpus. It now acts as a within-class score multiplier:
+
+| Entry project | Multiplier |
+|---|---|
+| same as query project (case-insensitive) | **1.3×** |
+| empty or `"general"` | **1.0×** (neutral) |
+| any other project | **0.8×** (demoted, not dropped) |
+
+A new `Query.StrictProject bool` field restores the pre-refactor hard-filter behavior for callers that truly want only-this-project results (CLI flags like a future `mastermind discover --project foo`). The MCP `mm_search` handler leaves `StrictProject` false — agent callers want the most relevant results across projects, just weighted toward the current one.
+
+**Implementation**: `internal/search/search.go`. Added `projectMultiplier(queryProject, entryProject string) float64` near `accessBoost`. Each per-entry scoring site in the two-pass pipeline (and the fuzzy fallback) computes `projMult := projectMultiplier(q.Project, r.Metadata.Project)` once per entry and multiplies the final `Score` by it. The multiplier applies to the full score (match contribution + access boost), so it scales proportionally. Class is not affected — this stays within-class only, preserving the tier-class invariant.
+
+**Why soft, not hard**: The hard filter dropped cross-project entries entirely. A user searching for "hook" in the mastermind repo never saw their own "hook" lesson from a different project, even if it was the only useful hit. The soft filter preserves cross-project discoverability while still privileging the current project as the most likely context.
+
+Convergent validation from shiba-memory (`002_profiles_scoping.sql:129-133`): shiba implements this exact pattern with the same 1.3 / 1.0 / 0.8 weights. The values were adopted verbatim because shiba has validated them in a similar retrieval context and there's no a-priori reason to re-tune. Adjust if dogfooding surfaces cross-project noise.
+
+**`general` as the neutral case**: mastermind's convention is that lessons with `project: general` apply across any project (see mm_write docs). The multiplier treats those as neutral (1.0×) regardless of the query's project — they should surface at their natural rank, not get demoted as "cross-project". Same treatment for entries with an empty project field (rare, but handled).
+
+**Interaction with tier classes**: Critical invariant — the multiplier is strictly within-class. A cross-project class-3 hit (topic tokens) still beats a same-project class-5 hit (body keyword) because class dominates score in the sort comparator. Test `TestKeywordSearcherProjectBoostIsWithinClassOnly` locks this in.
+
+**Interaction with access boost**: The multiplier scales the full score including the ACT-R access boost. This means a heavily-accessed cross-project entry can still surface above a fresh same-project one IF the underlying match signal is weak enough that access history is the deciding factor. That's the correct behavior — access proof > project proximity when the structural signal is marginal.
+
+**What was rejected**:
+- **Hard filter as default**: the old behavior. Dropped cross-project long-tail discoverability.
+- **Configurable weights**: considered letting `mm_search` callers pass custom multipliers. Rejected — one more knob with no clear use case, and shiba-memory's defaults are already validated. Revisit if real-world dogfooding reveals the 1.3/0.8 split is wrong.
+- **Project-boost as an additive score bump**: considered `score += 0.3` for same-project, `score -= 0.3` for cross-project. Rejected because additive bumps interact weirdly with tier-class bounds (a class-5 score is much smaller than class-3, so the same absolute bump has very different relative effects). Multiplicative scales proportionally and is easier to reason about.
+
+**Test coverage** (5 new tests in `internal/search/search_test.go`):
+- `TestProjectMultiplierCases` — all 7 matrix cases of the multiplier function.
+- `TestKeywordSearcherProjectBoostRanksSameProjectFirst` — soft-filter surfaces both entries, same-project ranks first.
+- `TestKeywordSearcherStrictProjectRestoresHardFilter` — `StrictProject: true` restores old behavior.
+- `TestKeywordSearcherProjectBoostIsWithinClassOnly` — multiplier cannot bridge class gaps.
+- Updates to `TestMatchesMetadataFilters` — project cases now test both soft (default) and strict paths.
+
+**Consequence for existing callers**: The MCP `mm_search` handler's semantics change subtly. A caller passing `project: "mastermind"` previously saw ONLY mastermind entries; now they see a mastermind-biased ranking across all projects. This is the intended behavior. CLI callers that need hard filtering can set `StrictProject: true` — but the current CLI subcommands don't pass `Project` through `Query` at all (verified during the design pass), so no CLI is affected.
+
+---
+
 ## TBD — project-personal sync strategy
 
 **Status**: Open.

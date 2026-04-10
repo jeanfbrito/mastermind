@@ -171,14 +171,23 @@ func TestMatchesMetadataFilters(t *testing.T) {
 		t.Error("kind mismatch should fail")
 	}
 
-	// Matching project (case-insensitive)
+	// Project is a soft ranking signal by default — matchesMetadataFilters
+	// ignores it unless StrictProject is set. Both matching and mismatched
+	// projects pass the filter; ranking is handled later via
+	// projectMultiplier.
 	if !matchesMetadataFilters(ref, Query{Project: "MasterMind"}) {
-		t.Error("project match should be case-insensitive")
+		t.Error("non-strict project match should pass")
+	}
+	if !matchesMetadataFilters(ref, Query{Project: "other"}) {
+		t.Error("non-strict project mismatch should pass (ranking, not filter)")
 	}
 
-	// Non-matching project
-	if matchesMetadataFilters(ref, Query{Project: "other"}) {
-		t.Error("project mismatch should fail")
+	// StrictProject restores the old hard-filter behavior.
+	if !matchesMetadataFilters(ref, Query{Project: "MasterMind", StrictProject: true}) {
+		t.Error("strict project match should pass (case-insensitive)")
+	}
+	if matchesMetadataFilters(ref, Query{Project: "other", StrictProject: true}) {
+		t.Error("strict project mismatch should fail")
 	}
 
 	// Matching all required tags (AND)
@@ -309,7 +318,13 @@ func TestKeywordSearcherFilterByKind(t *testing.T) {
 	}
 }
 
-func TestKeywordSearcherFilterByProject(t *testing.T) {
+func TestKeywordSearcherProjectBoostRanksSameProjectFirst(t *testing.T) {
+	// Under the 2026-04-10 soft-filter refactor, Query.Project is a
+	// ranking multiplier (1.3× same-project, 0.8× cross-project), not
+	// a hard filter. Both rocket-chat AND mastermind results should
+	// surface for "macos"; rocket-chat must rank first because its
+	// entry is same-project AND sits in a higher class (class 3 vs
+	// class 4 for the mastermind tag-only hit).
 	s := populateStore(t)
 	searcher := NewKeywordSearcher(s)
 
@@ -320,11 +335,132 @@ func TestKeywordSearcherFilterByProject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Search: %v", err)
 	}
+	if len(results) < 2 {
+		t.Fatalf("got %d results, want >= 2 (soft filter must surface both)", len(results))
+	}
+	if results[0].Metadata.Project != "rocket-chat" {
+		t.Errorf("results[0].Project = %q, want rocket-chat (same-project boost)", results[0].Metadata.Project)
+	}
+	// The mastermind entry must also appear — cross-project demoted,
+	// not dropped.
+	var sawMastermind bool
+	for _, r := range results {
+		if r.Metadata.Project == "mastermind" {
+			sawMastermind = true
+			break
+		}
+	}
+	if !sawMastermind {
+		t.Error("mastermind entry dropped — soft filter should surface cross-project entries")
+	}
+}
+
+func TestKeywordSearcherStrictProjectRestoresHardFilter(t *testing.T) {
+	// StrictProject=true is the escape hatch for callers that truly
+	// want only-this-project results (e.g., a future `mastermind
+	// discover --project foo` CLI flag). It restores the pre-refactor
+	// behavior: cross-project entries are dropped entirely.
+	s := populateStore(t)
+	searcher := NewKeywordSearcher(s)
+
+	results, err := searcher.Search(Query{
+		QueryText:     "macos",
+		Project:       "rocket-chat",
+		StrictProject: true,
+	})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
 	if len(results) != 1 {
-		t.Fatalf("got %d, want 1", len(results))
+		t.Fatalf("got %d results, want exactly 1 (hard filter)", len(results))
 	}
 	if results[0].Metadata.Project != "rocket-chat" {
 		t.Errorf("result project = %q, want rocket-chat", results[0].Metadata.Project)
+	}
+}
+
+func TestProjectMultiplierCases(t *testing.T) {
+	cases := []struct {
+		name         string
+		queryProject string
+		entryProject string
+		want         float64
+	}{
+		{"no query project → neutral", "", "mastermind", 1.0},
+		{"same project match → boost", "mastermind", "mastermind", 1.3},
+		{"same project case-insensitive", "MasterMind", "mastermind", 1.3},
+		{"general entry → neutral", "mastermind", "general", 1.0},
+		{"general case-insensitive", "mastermind", "General", 1.0},
+		{"empty entry project → neutral", "mastermind", "", 1.0},
+		{"cross-project → demote", "mastermind", "rocket-chat", 0.8},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := projectMultiplier(tc.queryProject, tc.entryProject)
+			if got != tc.want {
+				t.Errorf("projectMultiplier(%q, %q) = %v, want %v",
+					tc.queryProject, tc.entryProject, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestKeywordSearcherProjectBoostIsWithinClassOnly(t *testing.T) {
+	// Cross-project class-3 (topic tokens) must still beat same-project
+	// class-5 (body keyword) — the multiplier is a within-class
+	// tiebreaker, it can NEVER bridge a class gap. This locks in the
+	// orthogonality of the tier-class sort and the project boost.
+	tmp := t.TempDir()
+	cfg := store.Config{UserPersonalRoot: filepath.Join(tmp, "user"), Now: time.Now}
+	s := store.New(cfg)
+
+	// Entry A: cross-project, but topic contains the query token → class 3.
+	entA := &format.Entry{
+		Metadata: format.Metadata{
+			Date: "2026-04-01", Project: "other-project",
+			Topic: "widgets and things",
+			Kind:  format.KindLesson, Scope: format.ScopeUserPersonal,
+		},
+		Body: "unrelated body",
+	}
+	// Entry B: same-project, but query token only in body → class 5.
+	entB := &format.Entry{
+		Metadata: format.Metadata{
+			Date: "2026-04-01", Project: "my-project",
+			Topic: "unrelated",
+			Kind:  format.KindLesson, Scope: format.ScopeUserPersonal,
+		},
+		Body: "this talks about widgets extensively",
+	}
+	for _, e := range []*format.Entry{entA, entB} {
+		p, err := s.Write(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Promote(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	searcher := NewKeywordSearcher(s)
+	results, err := searcher.Search(Query{
+		QueryText: "widgets",
+		Project:   "my-project",
+	})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) < 2 {
+		t.Fatalf("got %d results, want 2", len(results))
+	}
+	// Class 3 (cross-project) must beat class 5 (same-project) — the
+	// multiplier is only a within-class signal.
+	if results[0].Metadata.Project != "other-project" {
+		t.Errorf("results[0].Project = %q, want other-project (class 3 beats class 5)",
+			results[0].Metadata.Project)
+	}
+	if results[0].class != classTopicTokens {
+		t.Errorf("results[0].class = %d, want classTopicTokens (3)", results[0].class)
 	}
 }
 

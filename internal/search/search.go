@@ -99,8 +99,30 @@ type Query struct {
 	// Kinds filters by entry kind. Empty = any kind.
 	Kinds []format.Kind
 
-	// Project filters by the project field in frontmatter. Empty = any.
+	// Project is the name of the "current" project. Empty = project
+	// boost disabled; every result gets a neutral 1.0× multiplier.
+	//
+	// When non-empty, Project acts as a soft ranking signal:
+	//   - same-project entries: 1.3× score (promoted)
+	//   - "general" / unset project on entry: 1.0× (neutral)
+	//   - cross-project entries: 0.8× (demoted but NOT dropped)
+	//
+	// This is a within-class tiebreaker — class still strictly
+	// dominates, so a cross-project class-0 hit always beats a
+	// same-project class-5 hit. To restore the old hard-filter
+	// behavior (drop cross-project results entirely), set
+	// StrictProject = true. See DECISIONS.md 2026-04-10 entry on the
+	// filter-to-multiplier refactor.
 	Project string
+
+	// StrictProject, when true, restores the hard-filter behavior on
+	// Project — cross-project entries are dropped entirely before
+	// scoring. Used by CLI callers with explicit "only this project"
+	// intent (e.g., a future --project foo flag on `mastermind
+	// discover`). The MCP tool surface always leaves this false:
+	// agent callers want the most relevant results across projects,
+	// just with a lean toward the current one.
+	StrictProject bool
 
 	// Tags requires every listed tag to be present (AND semantics). Empty = no tag filter.
 	Tags []string
@@ -290,11 +312,16 @@ func (k *KeywordSearcher) Search(q Query) ([]Result, error) {
 		topicLower := strings.ToLower(r.Metadata.Topic)
 		tagBlob := strings.ToLower(strings.Join(r.Metadata.Tags, " "))
 
+		// Project boost: computed once per entry, applied as a
+		// within-class multiplier on the final Score. See
+		// projectMultiplier for the 1.3 / 1.0 / 0.8 semantics.
+		projMult := projectMultiplier(q.Project, r.Metadata.Project)
+
 		// Tier 0: exact phrase in topic.
 		if exactPhrase != "" && strings.Contains(topicLower, exactPhrase) {
 			results = append(results, Result{
 				Ref:      r,
-				Score:    5.0 + accessBoost(r.Metadata.Accessed),
+				Score:    (5.0 + accessBoost(r.Metadata.Accessed)) * projMult,
 				Metadata: r.Metadata,
 				class:    classExactTopic,
 			})
@@ -304,7 +331,7 @@ func (k *KeywordSearcher) Search(q Query) ([]Result, error) {
 		if exactPhrase != "" && strings.Contains(tagBlob, exactPhrase) {
 			results = append(results, Result{
 				Ref:      r,
-				Score:    4.0 + accessBoost(r.Metadata.Accessed),
+				Score:    (4.0 + accessBoost(r.Metadata.Accessed)) * projMult,
 				Metadata: r.Metadata,
 				class:    classExactTag,
 			})
@@ -339,7 +366,7 @@ func (k *KeywordSearcher) Search(q Query) ([]Result, error) {
 		if topicHits == nTokens {
 			results = append(results, Result{
 				Ref:      r,
-				Score:    topicTagScore + accessBoost(r.Metadata.Accessed),
+				Score:    (topicTagScore + accessBoost(r.Metadata.Accessed)) * projMult,
 				Metadata: r.Metadata,
 				class:    classTopicTokens,
 			})
@@ -351,7 +378,7 @@ func (k *KeywordSearcher) Search(q Query) ([]Result, error) {
 		if metaHits == nTokens {
 			results = append(results, Result{
 				Ref:      r,
-				Score:    topicTagScore + accessBoost(r.Metadata.Accessed),
+				Score:    (topicTagScore + accessBoost(r.Metadata.Accessed)) * projMult,
 				Metadata: r.Metadata,
 				class:    classMetaTokens,
 			})
@@ -389,12 +416,13 @@ func (k *KeywordSearcher) Search(q Query) ([]Result, error) {
 			}
 			body := entry.Body
 			bodyLower := strings.ToLower(body)
+			projMult := projectMultiplier(q.Project, c.ref.Metadata.Project)
 
 			// Tier 2: exact phrase in body.
 			if exactPhrase != "" && strings.Contains(bodyLower, exactPhrase) {
 				results = append(results, Result{
 					Ref:      c.ref,
-					Score:    3.0 + accessBoost(c.ref.Metadata.Accessed),
+					Score:    (3.0 + accessBoost(c.ref.Metadata.Accessed)) * projMult,
 					Body:     body,
 					Metadata: c.ref.Metadata,
 					class:    classExactBody,
@@ -411,7 +439,7 @@ func (k *KeywordSearcher) Search(q Query) ([]Result, error) {
 			score += accessBoost(c.ref.Metadata.Accessed)
 			results = append(results, Result{
 				Ref:      c.ref,
-				Score:    score,
+				Score:    score * projMult,
 				Body:     body,
 				Metadata: c.ref.Metadata,
 				class:    classKeyword,
@@ -476,9 +504,10 @@ func (k *KeywordSearcher) Search(q Query) ([]Result, error) {
 			if fuzzyScore > 0.5 {
 				fuzzyScore = 0.5
 			}
+			projMult := projectMultiplier(q.Project, ref.Metadata.Project)
 			results = append(results, Result{
 				Ref:      ref,
-				Score:    fuzzyScore + accessBoost(ref.Metadata.Accessed),
+				Score:    (fuzzyScore + accessBoost(ref.Metadata.Accessed)) * projMult,
 				Metadata: ref.Metadata,
 				class:    classFuzzy,
 			})
@@ -532,7 +561,11 @@ func matchesMetadataFilters(ref store.EntryRef, q Query) bool {
 		}
 	}
 
-	if q.Project != "" && !strings.EqualFold(md.Project, q.Project) {
+	// Project filtering is a soft ranking signal by default — see
+	// projectMultiplier and DECISIONS.md 2026-04-10. The hard filter
+	// only kicks in when StrictProject is explicitly set by the
+	// caller (CLI subcommands with --project foo, not the MCP tool).
+	if q.StrictProject && q.Project != "" && !strings.EqualFold(md.Project, q.Project) {
 		return false
 	}
 
@@ -653,6 +686,44 @@ func accessBoost(accessed int) float64 {
 		return 0.5
 	}
 	return boost
+}
+
+// projectMultiplier returns the within-class score multiplier for an
+// entry based on its project relative to the query's current project.
+// The three cases:
+//
+//   - queryProject is empty: project boost disabled, return 1.0.
+//   - entryProject matches queryProject (case-insensitive): 1.3× —
+//     same-project entries earn a noticeable promotion within their
+//     tier class (a within-class tiebreaker, never a cross-class jump).
+//   - entryProject is empty or "general": 1.0× — cross-project-by-
+//     design entries stay neutral. "general" is mastermind's convention
+//     for lessons that apply across any project (see mm_write docs).
+//   - otherwise: 0.8× — a different project's lesson is demoted but
+//     not dropped. A heavily-accessed cross-project entry can still
+//     surface above a weaker same-project one, which is the whole
+//     point of making this a multiplier instead of a hard filter.
+//
+// Borrowed from shiba-memory's 002_profiles_scoping.sql:129-133
+// (1.3 / 1.0 / 0.8 weights, same semantics). The values were
+// adopted verbatim because shiba-memory has validated them in a
+// similar retrieval context and there's no a-priori reason to
+// re-tune. Adjust if dogfooding shows cross-project noise.
+//
+// The multiplier applies to the FULL Score (match-score + access
+// boost), so it scales proportionally. Class is not affected —
+// this is purely a within-class ranking signal.
+func projectMultiplier(queryProject, entryProject string) float64 {
+	if queryProject == "" {
+		return 1.0
+	}
+	if entryProject == "" || strings.EqualFold(entryProject, "general") {
+		return 1.0
+	}
+	if strings.EqualFold(entryProject, queryProject) {
+		return 1.3
+	}
+	return 0.8
 }
 
 // sortResultsByTier orders results by the tiered-fallback comparator:
