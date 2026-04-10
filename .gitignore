@@ -24,3 +24,6 @@ coverage.txt
 /tmp/
 /.local/
 tasks/todo.md
+
+# Claude Code local state
+.claude/
