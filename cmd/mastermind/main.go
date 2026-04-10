@@ -29,6 +29,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jeanfbrito/mastermind/internal/config"
 	"github.com/jeanfbrito/mastermind/internal/discover"
 	"github.com/jeanfbrito/mastermind/internal/extract"
 	"github.com/jeanfbrito/mastermind/internal/format"
@@ -182,6 +183,55 @@ func buildSessionConfig(cwd string) (store.Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// resolveTaskConfig loads the user + project config files and returns
+// the fully-resolved binding for a named task. The user-level file is
+// always at ~/.knowledge/config.json. The project-level file is at
+// <project-root>/.knowledge/config.json when cwd is inside a project
+// that has a .knowledge/ directory. Missing files are not errors —
+// they fall through to env vars + built-in defaults.
+//
+// This is the single entry point every subcommand uses to pick a
+// model/provider/mode. Before this existed the logic was duplicated
+// across runExtract, runDiscover, and runExtractAudit with slightly
+// different fallback orders. Now they all share one resolver.
+func resolveTaskConfig(cwd, taskName string) (*config.Resolved, error) {
+	userPath := ""
+	if home, err := os.UserHomeDir(); err == nil {
+		userPath = filepath.Join(home, ".knowledge", "config.json")
+	}
+	projPath := ""
+	if root := store.FindProjectRoot(cwd); root != "" {
+		projPath = filepath.Join(root, ".knowledge", "config.json")
+	}
+	cfg, err := config.Load(userPath, projPath)
+	if err != nil {
+		return nil, err
+	}
+	return cfg.ResolveTask(taskName)
+}
+
+// applyResolvedToExtractConfig populates an extract.Config's
+// provider-specific fields from a config.Resolved. The extract.Config
+// contract still uses flavor-specific fields (AnthropicAPIKey,
+// OllamaURL, BaseURL, APIKey) so the openai/anthropic/ollama branches
+// in NewLLMExtractor keep working unchanged. This function is the
+// translator between the flat Resolved shape and the legacy
+// fan-out shape.
+func applyResolvedToExtractConfig(dst *extract.Config, r *config.Resolved) {
+	dst.Mode = r.Mode
+	dst.LLMProvider = r.Flavor
+	dst.LLMModel = r.Model
+	switch r.Flavor {
+	case "anthropic":
+		dst.AnthropicAPIKey = r.APIKey
+	case "ollama":
+		dst.OllamaURL = r.BaseURL
+	case "openai":
+		dst.BaseURL = r.BaseURL
+		dst.APIKey = r.APIKey
+	}
 }
 
 // runMCPServer boots the three-scope store, wires up the searcher and
@@ -618,13 +668,15 @@ func runExtract() error {
 		projectName = project.Detect(cwd)
 	}
 
-	extractCfg := extract.Config{
-		Mode:        envOrDefault("MASTERMIND_EXTRACT_MODE", "keyword"),
-		LLMProvider: envOrDefault("MASTERMIND_LLM_PROVIDER", "anthropic"),
-		LLMModel:    os.Getenv("MASTERMIND_LLM_MODEL"),
-		OllamaURL:   envOrDefault("MASTERMIND_OLLAMA_URL", "http://localhost:11434"),
-		ProjectName: projectName,
+	// Resolve the extract task from ~/.knowledge/config.json (+
+	// project override), overlaid by legacy env vars. See
+	// resolveTaskConfig for the precedence rules.
+	resolved, err := resolveTaskConfig(cwd, "extract")
+	if err != nil {
+		return fmt.Errorf("resolve extract config: %w", err)
 	}
+	extractCfg := extract.Config{ProjectName: projectName}
+	applyResolvedToExtractConfig(&extractCfg, resolved)
 	extractor := extract.NewExtractor(extractCfg)
 
 	// Extract entries.
@@ -732,10 +784,10 @@ func runDiscover() error {
 		projectName = "general"
 	}
 
-	provider := envOrDefault("MASTERMIND_LLM_PROVIDER", "anthropic")
-	apiKey := os.Getenv("ANTHROPIC_API_KEY")
-	if provider == "openai" {
-		apiKey = os.Getenv("MASTERMIND_LLM_API_KEY")
+	// Resolve the discover task via the shared config resolver.
+	resolved, err := resolveTaskConfig(cwd, "discover")
+	if err != nil {
+		return fmt.Errorf("resolve discover config: %w", err)
 	}
 
 	disc, err := discover.New(discover.Config{
@@ -743,16 +795,16 @@ func runDiscover() error {
 		Depth:       depth,
 		Cwd:         cwd,
 		ProjectName: projectName,
-		LLMProvider: provider,
-		LLMModel:    os.Getenv("MASTERMIND_LLM_MODEL"),
-		BaseURL:     os.Getenv("MASTERMIND_LLM_BASE_URL"),
-		APIKey:      apiKey,
+		LLMProvider: resolved.Flavor,
+		LLMModel:    resolved.Model,
+		BaseURL:     resolved.BaseURL,
+		APIKey:      resolved.APIKey,
 	}, s)
 	if err != nil {
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "mastermind discover: mode=%s depth=%d provider=%s\n", mode, depth, provider)
+	fmt.Fprintf(os.Stderr, "mastermind discover: mode=%s depth=%d provider=%s\n", mode, depth, resolved.Flavor)
 
 	result, err := disc.Run()
 	if err != nil {
@@ -1014,9 +1066,19 @@ Usage:
 Discover options:
   mastermind discover [git|codebase|all] [--depth N] [--cwd DIR]
 
-  Env vars: MASTERMIND_LLM_PROVIDER (anthropic|openai)
-            MASTERMIND_LLM_MODEL, MASTERMIND_LLM_BASE_URL, MASTERMIND_LLM_API_KEY
-            ANTHROPIC_API_KEY (for anthropic provider)
+Configuration (model / provider selection):
+  mastermind reads ~/.knowledge/config.json for per-task provider and
+  model bindings, optionally overlaid by <project>/.knowledge/config.json.
+  Legacy env vars still work and override the config file:
+    MASTERMIND_EXTRACT_MODE   keyword|llm
+    MASTERMIND_LLM_PROVIDER   anthropic|openai|ollama
+    MASTERMIND_LLM_MODEL      model identifier
+    MASTERMIND_LLM_BASE_URL   openai/ollama endpoint
+    MASTERMIND_LLM_API_KEY    bearer token
+    ANTHROPIC_API_KEY         anthropic flavor
+    MASTERMIND_OLLAMA_URL     ollama flavor
+
+  See docs/CONFIG.md for the config file shape and examples.
 
 MCP tools (for agent use):
   mm_search       Search persistent knowledge across scopes

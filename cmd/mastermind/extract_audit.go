@@ -97,10 +97,11 @@ type auditStats struct {
 //	--json            emit machine-readable JSON instead of a table
 func runExtractAudit() error {
 	corpusPath := "testdata/audit/corpus.json"
-	mode := "keyword"
-	provider := "anthropic"
-	model := ""
-	baseURL := os.Getenv("MASTERMIND_LLM_BASE_URL")
+	// These start empty so the config resolver provides the actual
+	// defaults. A non-empty value from the CLI overrides whatever
+	// the config + env-var layer resolved. This is the per-invocation
+	// override layer that sits on top of the resolver stack.
+	var mode, provider, model, baseURL string
 	verbose := false
 	jsonOut := false
 	dumpOnly := false
@@ -152,6 +153,28 @@ func runExtractAudit() error {
 		return fmt.Errorf("corpus %s has no transcripts", corpusPath)
 	}
 
+	// Resolve the audit task from config + env overlay. CLI flags
+	// override on top — the caller can explicitly pick a provider or
+	// model for a single audit run without editing the config file.
+	cwd, _ := os.Getwd()
+	resolved, err := resolveTaskConfig(cwd, "audit")
+	if err != nil {
+		return fmt.Errorf("resolve audit config: %w", err)
+	}
+	if mode == "" {
+		mode = resolved.Mode
+	}
+	if provider == "" {
+		provider = resolved.Flavor
+	}
+	if model == "" {
+		model = resolved.Model
+	}
+	if baseURL == "" {
+		baseURL = resolved.BaseURL
+	}
+	apiKey := resolved.APIKey
+
 	// Build the extractor with strict mode selection. Unlike runExtract,
 	// the audit MUST NOT silently fall back from llm to keyword on setup
 	// failure — a silent fallback would report keyword-tier numbers
@@ -164,18 +187,27 @@ func runExtractAudit() error {
 		// Strict=true disables silent fallback to the keyword tier.
 		// Production extract wants graceful degradation, but the audit
 		// MUST NOT report keyword numbers under an --mode=llm header.
-		llm, err := extract.NewLLMExtractor(extract.Config{
+		// The flavor-specific key/url fields are populated based on
+		// the resolved flavor so NewLLMExtractor's switch finds them.
+		llmCfg := extract.Config{
 			Mode:        mode,
 			LLMProvider: provider,
 			LLMModel:    model,
-			OllamaURL:   envOrDefault("MASTERMIND_OLLAMA_URL", "http://localhost:11434"),
-			BaseURL:     baseURL,
-			APIKey:      os.Getenv("MASTERMIND_LLM_API_KEY"),
 			Strict:      true,
 			ProjectName: "audit",
-		})
+		}
+		switch provider {
+		case "anthropic":
+			llmCfg.AnthropicAPIKey = apiKey
+		case "ollama":
+			llmCfg.OllamaURL = baseURL
+		case "openai":
+			llmCfg.BaseURL = baseURL
+			llmCfg.APIKey = apiKey
+		}
+		llm, err := extract.NewLLMExtractor(llmCfg)
 		if err != nil {
-			return fmt.Errorf("llm extractor unavailable (%w) — check ANTHROPIC_API_KEY / MASTERMIND_LLM_API_KEY / MASTERMIND_LLM_BASE_URL env vars", err)
+			return fmt.Errorf("llm extractor unavailable (%w) — check ~/.knowledge/config.json or ANTHROPIC_API_KEY / MASTERMIND_LLM_API_KEY / MASTERMIND_LLM_BASE_URL env vars", err)
 		}
 		extractor = llm
 	default:
