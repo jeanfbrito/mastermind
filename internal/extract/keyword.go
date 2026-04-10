@@ -38,6 +38,14 @@ var patterns = []pattern{
 
 	// War stories
 	{re: regexp.MustCompile(`(?i)(?:wasted (?:time|hours)|hours debugging|painful|nightmare|kept failing|going in circles)`), kind: format.KindWarStory, confidence: format.ConfidenceMedium},
+	// "root cause" is listed above as a lesson signal. It is ALSO a
+	// war-story signal when the surrounding context is a specific
+	// debugging journey. Emitted here as a second candidate so the
+	// (topic, kind) dedup lets both survive — the one that matches
+	// the region's true nature wins in review. Phase 3 polish audit
+	// finding: war-story-labeled "root cause" extracts were missed
+	// because the extractor only emitted the lesson variant.
+	{re: regexp.MustCompile(`(?i)root cause`), kind: format.KindWarStory, confidence: format.ConfidenceMedium},
 
 	// Decisions — soulforge WSM phrases + existing patterns.
 	// "we should" is intentionally left in open-loop (below) because
@@ -72,10 +80,27 @@ var patterns = []pattern{
 	{re: regexp.MustCompile(`(?i)\bdiscovered\b`), kind: format.KindInsight, confidence: format.ConfidenceMedium},
 	// "it seems" is hedging language — lower precision than clear assertions.
 	{re: regexp.MustCompile(`(?i)\bit seems\b`), kind: format.KindInsight, confidence: format.ConfidenceLow},
+	// "nightmare" is listed above as a war-story signal. It is ALSO an
+	// insight signal when the surrounding context is a principle
+	// learned from the nightmare rather than the nightmare itself
+	// (e.g. "two tools writing to one dir is a support nightmare" is
+	// an architectural insight, not a debugging story). Lower
+	// confidence than the war-story variant because insight usage is
+	// less frequent. Phase 3 polish audit finding.
+	{re: regexp.MustCompile(`(?i)nightmare`), kind: format.KindInsight, confidence: format.ConfidenceLow},
 }
 
 // Extract scans the transcript for pattern matches, groups surrounding
 // context into entries, and deduplicates against existing topics.
+//
+// Dedup is keyed on (topic, kind), not topic alone. Early versions
+// used topic-only dedup, which silently suppressed multi-kind
+// emissions — e.g. "root cause" is both a lesson and a war-story
+// signal, and if the lesson regex fired first the war-story regex
+// was dropped on the same line. Keying on (topic, kind) lets the
+// same region surface under multiple kinds when genuinely ambiguous
+// signal phrases demand it. Same-topic same-kind duplicates are
+// still blocked, which is the real dedup intent.
 func (k *KeywordExtractor) Extract(transcript string, existingTopics []string) ([]format.Entry, error) {
 	if strings.TrimSpace(transcript) == "" {
 		return nil, nil
@@ -114,16 +139,19 @@ func (k *KeywordExtractor) Extract(transcript string, existingTopics []string) (
 				continue
 			}
 
-			// Dedup: skip if we've already extracted this topic or
-			// if it closely matches an existing entry.
-			topicKey := strings.ToLower(topic)
-			if seen[topicKey] {
+			// Dedup: skip if we've already extracted this (topic, kind)
+			// pair, or if the topic closely matches an existing entry.
+			// The (topic, kind) keying lets ambiguous signal phrases
+			// emit under multiple kinds — see the package comment.
+			topicLower := strings.ToLower(topic)
+			dedupKey := topicLower + "|" + string(pat.kind)
+			if seen[dedupKey] {
 				continue
 			}
-			if isDuplicate(topicKey, existingLower) {
+			if isDuplicate(topicLower, existingLower) {
 				continue
 			}
-			seen[topicKey] = true
+			seen[dedupKey] = true
 
 			project := k.ProjectName
 			if project == "" {
