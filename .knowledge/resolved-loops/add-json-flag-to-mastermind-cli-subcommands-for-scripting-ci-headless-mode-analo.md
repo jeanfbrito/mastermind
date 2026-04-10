@@ -13,7 +13,7 @@ kind: open-loop
 scope: project-shared
 category: cli
 confidence: high
-accessed: 2
+accessed: 3
 last_accessed: "2026-04-10"
 ---
 
@@ -34,3 +34,7 @@ Not urgent. No one is scripting mastermind today. Land when there's a concrete d
 
 ## Source
 Second-pass survey of soulforge. Headless mode from soulforge `docs/headless.md`; conversation 2026-04-10.
+
+## Resolution
+
+Shipped 2026-04-10. All CLI subcommands that emit human-readable output now support --json: session-start, post-compact, discover, extract, suggest (extract-audit already had it since fb3e119). Stable shapes per subcommand with empty slices instead of null. Documented in docs/ARCHITECTURE.md and help text. 11 new tests in cmd/mastermind/json_flag_test.go.

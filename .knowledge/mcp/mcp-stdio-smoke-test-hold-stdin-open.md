@@ -1,11 +1,18 @@
 ---
-date: 2026-04-04
+date: "2026-04-04"
 project: mastermind
-tags: [mcp, stdio, testing, smoke-test, go-sdk]
-topic: "MCP stdio smoke tests must hold stdin open past response flush"
+tags:
+  - mcp
+  - stdio
+  - testing
+  - smoke-test
+  - go-sdk
+topic: MCP stdio smoke tests must hold stdin open past response flush
 kind: pattern
 scope: project-shared
 confidence: high
+accessed: 2
+last_accessed: "2026-04-10"
 ---
 
 # MCP stdio smoke tests must hold stdin open past response flush

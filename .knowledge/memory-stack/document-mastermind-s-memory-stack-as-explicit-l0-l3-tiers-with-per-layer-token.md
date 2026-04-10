@@ -13,6 +13,8 @@ kind: decision
 scope: project-shared
 category: memory-stack
 confidence: high
+accessed: 2
+last_accessed: "2026-04-10"
 ---
 
 ## Decision

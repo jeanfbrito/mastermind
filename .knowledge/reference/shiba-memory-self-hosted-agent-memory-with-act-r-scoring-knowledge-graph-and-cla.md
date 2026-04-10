@@ -13,7 +13,7 @@ kind: insight
 scope: project-shared
 category: reference
 confidence: high
-accessed: 5
+accessed: 6
 last_accessed: "2026-04-10"
 ---
 
