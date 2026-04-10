@@ -42,3 +42,7 @@ Three characters of Go template; measurable quality win for any extraction that 
 ## Source
 
 `docs/reference-notes/openviking.md`, OpenViking `session/memory/session_extract_context_provider.py:~120`, mining report 2026-04-10 (Agent a143a0da extraction patterns).
+
+## Resolution
+
+Shipped 2026-04-10. LLMExtractor.Extract now prepends "Session time: YYYY-MM-DD (Weekday)\n\n" to the transcript before the provider switch, so all three providers (Anthropic, Ollama, OpenAI) pick it up automatically. Wall-clock source is indirected via a sessionNow package var for deterministic testing. 2 new tests verify format and real-clock behavior.

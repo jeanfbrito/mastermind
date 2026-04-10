@@ -58,3 +58,7 @@ Depends on the isSubstantive filler filter open loop landing first — otherwise
 ## Source
 
 `~/Github/soulforge/src/core/compaction/summarize.ts` `buildV2Summary` gap-fill threshold; mining report 2026-04-10 (Agent a143a0da extraction patterns); reference-notes/soulforge.md.
+
+## Resolution
+
+Shipped 2026-04-10. LLMExtractor.Extract always runs the keyword tier first; if it returns >= Config.GapFillThreshold entries (default 5), the LLM call is skipped and keyword entries are returned directly. Fallback path on LLM error also reuses the cached keyword results instead of re-running. No composition refactor needed — LLMExtractor already held a KeywordExtractor instance for fallback. 2 new tests lock in the skip behavior (unreachable endpoint + guaranteed connection refused proves no LLM call is made) and the threshold=0 bypass (preserves pre-refactor behavior).

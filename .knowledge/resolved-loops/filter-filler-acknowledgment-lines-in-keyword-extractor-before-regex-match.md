@@ -44,3 +44,7 @@ Zero-cost precision win. No behavior change for real decision/discovery lines. M
 ## Source
 
 `docs/reference-notes/soulforge.md` extractor section; mining report 2026-04-10 (Agent a143a0da extraction patterns).
+
+## Resolution
+
+Shipped 2026-04-10. Added package-level fillerPattern regex and a precomputed skipLine []bool mask in KeywordExtractor.Extract() — the filler check runs O(lines) instead of O(lines × patterns). Anchored to start-of-line with a word boundary so it can't match inside legitimate content. 3 new tests in item_b_test.go cover the regex matrix, the integration case (filler lines produce zero entries), and the regression guard (real decision/fix/plan lines still extract).
