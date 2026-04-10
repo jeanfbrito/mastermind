@@ -220,6 +220,21 @@ The Go version minimum (`go 1.25`) was a concern briefly but we're already on 1.
 
 ---
 
+## 2026-04-09 — Test baseline update: 164 tests across 7 packages
+
+**Decision**: The current test baseline is **164 tests passing across 7 Go packages** (`internal/format`, `internal/store`, `internal/project`, `internal/search`, `internal/mcp`, `internal/extract`, and `cmd/mastermind`). This supersedes the Phase 1 baseline of 91 tests across 6 packages.
+
+**What grew**:
+- `internal/extract`: 28 tests (new — keyword extractor patterns, deriveTopic, isDuplicate, parseExtractionResponse, NewExtractor factory)
+- `cmd/mastermind`: 16 tests added for suggest path (extractPathKeywords, countEntriesInDir, bestEntryTopic)
+- Other packages grew incrementally through Phases 2-3
+
+**How to verify**: `make test` — all packages green and total count ≥ 164. `go test ./... -count=1 -v | grep -c '^=== RUN'` gives the exact count.
+
+**Consequence**: Same rule as Phase 1 — this number MUST only grow. If a commit lands with fewer, something got silently broken.
+
+---
+
 ## 2026-04-06 — Reverse auto-expire: pending entries never lose knowledge
 
 **Decision**: Pending entries are kept indefinitely by default. The original hard rule #7 ("auto-expire after 7 days, silently") is reversed. An optional `PendingAutoPromote` policy moves old candidates to the live store after a configurable duration (default 7 days) — but the default behavior (`PendingKeepForever`) never touches pending entries. Knowledge is never silently deleted.
