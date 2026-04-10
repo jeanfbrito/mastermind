@@ -175,7 +175,7 @@ export MASTERMIND_LLM_PROVIDER=ollama
 - **Plain markdown + git.** No database, no embeddings, no vector store. Files on disk are the database. Git is the sync layer. A markdown file written today will still parse in 2034.
 - **Zero runtime dependencies.** Single static Go binary. No Python, no Node, no Docker, no Postgres. If the binary exists, it works.
 - **ADHD-first design.** Every feature passes the test: "does this work on a bad working-memory day?" If it requires you to remember to use it, it's the wrong design.
-- **Four MCP tools, forever.** `mm_search`, `mm_write`, `mm_promote`, `mm_close_loop`. Simplicity is a feature.
+- **Simplicity is a feature.** A small, focused tool surface beats a sprawling one.
 
 ## Non-goals
 
