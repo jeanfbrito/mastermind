@@ -12,7 +12,7 @@ This is NOT a general-purpose memory tool. For that, use [engram](https://github
 
 ## Status
 
-**Phases 1-3 largely complete.** 164 tests passing across 7 Go packages, binary builds and runs. Actively dogfooding.
+**Phases 1-3 largely complete.** 181 tests passing across 8 Go packages, binary builds and runs. Actively dogfooding.
 
 Recent git log (most recent first):
 ```
@@ -77,6 +77,7 @@ internal/project/               project name detection (git remote → git root 
 internal/search/                stdlib keyword search + topic-dominant ranking + access frequency scoring
 internal/mcp/                   MCP SDK wiring; the ONLY importer of modelcontextprotocol/go-sdk
 internal/extract/               knowledge extraction from transcripts (keyword + optional LLM backends)
+internal/discover/              autonomous discovery from git history + codebase (Haiku / OpenAI-compat)
 docs/                           design spec (read CONTINUITY.md first)
 ```
 
@@ -93,7 +94,7 @@ make tidy         # go mod tidy
 make install      # copies bin/mastermind to ~/.local/bin/ (verify first)
 ```
 
-**Always run `make test` and `make vet` before committing.** 164 tests is the current baseline across 7 packages; if a commit lands with fewer, something got silently broken.
+**Always run `make test` and `make vet` before committing.** 181 tests is the current baseline across 8 packages; if a commit lands with fewer, something got silently broken.
 
 ## Git discipline (this repo specifically)
 
@@ -116,6 +117,7 @@ What's working:
 - **`/mm-extract` skill** — manual extraction command for end-of-session capture
 - **`/mm-review` skill** — review pending entries one at a time (promote/reject/edit/skip)
 - **`/mm-discover` skill** — mine codebase + git history for knowledge using Haiku subagents (near-zero cost)
+- **`mastermind discover` CLI** — standalone discovery (no Claude Code session needed), supports Anthropic + any OpenAI-compatible endpoint
 - **PostToolUse suggest** — surfaces the most relevant entry's topic when you Read/Edit/Write a file, with per-file debounce
 - ~35 real entries across `~/.knowledge/` and 3 project stores
 

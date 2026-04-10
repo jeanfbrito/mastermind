@@ -29,6 +29,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jeanfbrito/mastermind/internal/discover"
 	"github.com/jeanfbrito/mastermind/internal/extract"
 	"github.com/jeanfbrito/mastermind/internal/format"
 	"github.com/jeanfbrito/mastermind/internal/mcp"
@@ -79,6 +80,12 @@ func main() {
 		case "suggest":
 			if err := runSuggest(); err != nil {
 				fmt.Fprintf(os.Stderr, "mastermind suggest: %s\n", err)
+				os.Exit(1)
+			}
+			return
+		case "discover":
+			if err := runDiscover(); err != nil {
+				fmt.Fprintf(os.Stderr, "mastermind discover: %s\n", err)
 				os.Exit(1)
 			}
 			return
@@ -539,6 +546,95 @@ func envOrDefault(key, defaultVal string) string {
 	return defaultVal
 }
 
+// ─── discover subcommand ──────────────────────────────────────────────
+
+// runDiscover implements the discover subcommand. It mines git history
+// and/or source code for knowledge using an LLM (Haiku or any
+// OpenAI-compatible endpoint) and writes entries to pending/.
+func runDiscover() error {
+	mode := "all"
+	depth := 100
+	cwd, _ := os.Getwd()
+
+	// Simple flag parsing (no flag package — matches other subcommands).
+	args := os.Args[2:]
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--mode":
+			if i+1 < len(args) {
+				mode = args[i+1]
+				i++
+			}
+		case "--depth":
+			if i+1 < len(args) {
+				fmt.Sscanf(args[i+1], "%d", &depth)
+				i++
+			}
+		case "--cwd":
+			if i+1 < len(args) {
+				cwd = args[i+1]
+				i++
+			}
+		default:
+			// Positional: treat as mode if it's a known value.
+			if args[i] == "git" || args[i] == "codebase" || args[i] == "all" {
+				mode = args[i]
+			}
+		}
+	}
+
+	cfg, err := buildSessionConfig(cwd)
+	if err != nil {
+		return err
+	}
+	s := store.New(cfg)
+
+	projectName := project.DetectFromGit(cwd)
+	if projectName == "" {
+		projectName = "general"
+	}
+
+	provider := envOrDefault("MASTERMIND_LLM_PROVIDER", "anthropic")
+	apiKey := os.Getenv("ANTHROPIC_API_KEY")
+	if provider == "openai" {
+		apiKey = os.Getenv("MASTERMIND_LLM_API_KEY")
+	}
+
+	disc, err := discover.New(discover.Config{
+		Mode:        mode,
+		Depth:       depth,
+		Cwd:         cwd,
+		ProjectName: projectName,
+		LLMProvider: provider,
+		LLMModel:    os.Getenv("MASTERMIND_LLM_MODEL"),
+		BaseURL:     os.Getenv("MASTERMIND_LLM_BASE_URL"),
+		APIKey:      apiKey,
+	}, s)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(os.Stderr, "mastermind discover: mode=%s depth=%d provider=%s\n", mode, depth, provider)
+
+	result, err := disc.Run()
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(os.Stderr, "\nDiscovery complete: %d entries written to pending/\n", len(result.Entries))
+	if result.CommitsAnalyzed > 0 || result.CommitsSkipped > 0 {
+		fmt.Fprintf(os.Stderr, "  Git: %d commits analyzed, %d skipped (already discovered)\n", result.CommitsAnalyzed, result.CommitsSkipped)
+	}
+	if result.PackagesScanned > 0 {
+		fmt.Fprintf(os.Stderr, "  Codebase: %d packages scanned\n", result.PackagesScanned)
+	}
+	if len(result.Entries) > 0 {
+		fmt.Fprintf(os.Stderr, "\nRun /mm-review to promote the good ones.\n")
+	}
+
+	return nil
+}
+
 // ─── suggest subcommand ────────────────────────────────────────────────
 
 // suggestHookInput is the JSON structure Claude Code sends to PostToolUse hooks.
@@ -769,8 +865,18 @@ Usage:
   mastermind mcp                Explicit: start MCP server
   mastermind session-start      Claude Code session-start hook (surfaces open loops + project context)
   mastermind session-close      Claude Code session-close hook (phase 3b, not implemented)
+  mastermind extract            Extract knowledge from a conversation transcript
+  mastermind suggest            PostToolUse hook — nudge when knowledge exists for a file
+  mastermind discover           Mine git history + codebase for knowledge (Haiku / OpenAI-compat)
   mastermind version            Print version and exit
   mastermind help               Show this help
+
+Discover options:
+  mastermind discover [git|codebase|all] [--depth N] [--cwd DIR]
+
+  Env vars: MASTERMIND_LLM_PROVIDER (anthropic|openai)
+            MASTERMIND_LLM_MODEL, MASTERMIND_LLM_BASE_URL, MASTERMIND_LLM_API_KEY
+            ANTHROPIC_API_KEY (for anthropic provider)
 
 MCP tools (for agent use):
   mm_search       Search persistent knowledge across scopes

@@ -191,15 +191,41 @@ export MASTERMIND_EXTRACT_MODE=llm
 export MASTERMIND_LLM_PROVIDER=ollama
 ```
 
+## Standalone discovery
+
+Mine git history and source code for knowledge without a Claude Code session. Runs directly against Anthropic Haiku or any OpenAI-compatible endpoint (Ollama, LM Studio, vLLM, Together.ai, Groq, etc.).
+
+```bash
+# With Anthropic Haiku (default)
+mastermind discover --mode git --depth 50
+
+# With a local model via Ollama
+MASTERMIND_LLM_PROVIDER=openai mastermind discover
+
+# With a hosted OpenAI-compatible provider
+MASTERMIND_LLM_PROVIDER=openai \
+MASTERMIND_LLM_BASE_URL=https://api.together.xyz/v1 \
+MASTERMIND_LLM_API_KEY=your-key \
+MASTERMIND_LLM_MODEL=meta-llama/Llama-3-8b-chat-hf \
+mastermind discover --mode all --depth 200
+```
+
+Modes: `git` (mine commit history), `codebase` (scan packages), `all` (both). Entries land in `pending/` — review with `/mm-review`.
+
+Fully incremental: `## Source` sections in entries track which commits have been analyzed. Running again only processes new commits.
+
 ## Configuration
 
 | Environment variable | Default | Description |
 |---------------------|---------|-------------|
 | `MASTERMIND_NO_AUTO_INIT` | _(unset)_ | Set to `1` to disable automatic `.knowledge/` creation in git repos |
 | `MASTERMIND_EXTRACT_MODE` | `keyword` | `keyword` for regex-based extraction, `llm` for model-powered extraction |
-| `MASTERMIND_LLM_PROVIDER` | `anthropic` | `anthropic` or `ollama` |
-| `MASTERMIND_LLM_MODEL` | _(auto)_ | Model identifier (defaults to Haiku for Anthropic, llama3.2 for Ollama) |
-| `MASTERMIND_OLLAMA_URL` | `http://localhost:11434` | Ollama API endpoint |
+| `MASTERMIND_LLM_PROVIDER` | `anthropic` | `anthropic` or `openai` (OpenAI-compatible endpoint) |
+| `MASTERMIND_LLM_MODEL` | _(auto)_ | Model identifier (defaults to Haiku for Anthropic, llama3.2 for OpenAI) |
+| `MASTERMIND_LLM_BASE_URL` | `http://localhost:11434/v1` | Base URL for OpenAI-compatible providers |
+| `MASTERMIND_LLM_API_KEY` | _(unset)_ | API key for OpenAI-compatible providers (optional for local models) |
+| `MASTERMIND_OLLAMA_URL` | `http://localhost:11434` | Ollama API endpoint (for extract hook, legacy) |
+| `ANTHROPIC_API_KEY` | _(unset)_ | Anthropic API key (for Haiku extraction and discovery) |
 
 ## Design principles
 
