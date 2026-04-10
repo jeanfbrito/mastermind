@@ -8,6 +8,9 @@ Full per-source reports live in `docs/reference-notes/`:
 - `brv.md` — byterover-cli. Node format and behavior reference. Rewritten in Go, not forked.
 - `openviking.md` — OpenViking extraction pipeline and prompt (verbatim captured).
 - `go-mcp-landscape.md` — Go MCP SDK survey and real-world Go MCP server census.
+- `soulforge.md` — soulforge compaction v2 (WorkingStateManager) + MemPalace integration. Added post-Phase-0 for Phase 3 extraction comparison and Phase 5+ contradiction-detection ideas.
+- `shiba-memory.md` — shiba-memory full Claude Code hook suite (adds PostCompact + Stop), six relation types, tiered extraction (free/LLM), ACT-R scoring modes. Added post-Phase-0 as the closest behavioral peer.
+- `mempalace.md` — mempalace raw-verbatim storage philosophy (LongMemEval 96.6%), the L0-L3 memory stack, palace/wing/room taxonomy, hook-block extraction pattern. Added post-Phase-0 as the philosophical counterpoint on the extraction axis.
 
 ## Unlocked decisions
 
@@ -204,6 +207,84 @@ After writing new memories, you MUST also update the corresponding .overview.md 
 - SQLite metrics database (47 KB in `src/core/tracking.rs`). If mastermind ever needs telemetry it's a JSON log file.
 
 **Short version**: read rtk for style, not substance. engram is the substantive reference.
+
+### 6. soulforge — Phase 3 extraction comparison (added post-Phase-0)
+
+**URL**: https://github.com/proxysoul/soulforge
+**Role**: NOT a wiring reference (TypeScript, lives inside the agent harness). Useful for its compaction v2 strategy and its integration with MemPalace as an upstream memory MCP server. Full notes in `docs/reference-notes/soulforge.md`.
+
+**The one idea worth the read**: soulforge's `WorkingStateManager` extracts `task, plan, files, decisions, failures, discoveries, environment, toolResults, userRequirements, assistantNotes` **incrementally during the conversation** via rule-based and regex extractors (zero LLM cost), then optionally runs a 2K-token LLM gap-fill pass — skipped entirely when ≥15 slots are already populated. Regex patterns: `"I'll use..."`, `"decided to..."`, `"because..."`, `"found that..."`, `"the issue was..."`.
+
+**Direct translation candidates for mastermind's `internal/extract/`**:
+
+1. **Decision/discovery regex patterns** — drop into the keyword backend. Zero-cost recall win.
+2. **LLM gap-fill short-circuit** — skip the Haiku/Ollama pass when the keyword extractor already returned ≥N high-confidence candidates.
+
+**What mastermind can't copy**: the incremental per-tool-call WSM itself. Mastermind is an external MCP binary; it doesn't see tool calls as they happen, only a snapshot at PreCompact. The WSM pattern assumes you live inside the harness.
+
+**Two ideas parked for Phase 5+** (from MemPalace, soulforge's upstream memory):
+
+- **Contradiction detection at `/mm-review` time** — when a new candidate contradicts an existing live entry, flag it in the review UI instead of silently writing both. Validates mastermind's "knowledge is never silently deleted" rule and extends it with "and conflicting truths get surfaced, not buried."
+- **Explicit `supersedes:` frontmatter field** — new optional field (schema-compatible with FORMAT.md since the contract forbids changes to existing fields, not additions). Lets an entry explicitly replace an older one without deleting it. Mirrors MemPalace's temporal `invalidate()` pattern and shiba-memory's `supersedes` relation type.
+
+**The counterpoint worth taking seriously**: MemPalace's LongMemEval result is 96.6% with *raw verbatim storage* vs. 84.2% with their lossy AAAK extraction layer. "We don't burn an LLM to decide what's worth remembering — we keep everything and let semantic search find it." Mastermind deliberately chooses extraction over verbatim storage because the goal is "surface the right lesson on a bad working-memory day," not "recall every word of every session" — and session-start injection has a hard token budget that verbatim storage can't meet. But the finding suggests the extraction prompt should be **high-recall, not lossy**: when in doubt, extract more, let the pending queue and review loop do the pruning. Audit the extractor against this bias.
+
+### 7. shiba-memory — the closest behavioral peer (added post-Phase-0)
+
+**URL**: https://github.com/ryaboy25/shiba-memory
+**Local clone**: `~/Github/shiba-memory`
+**Role**: **NOT a storage reference** (Postgres + pgvector + HTTP gateway, all rejected by mastermind's design). **IS a behavioral reference** for hook coverage, relation taxonomy, tiered extraction, and ACT-R scoring. Full notes in `docs/reference-notes/shiba-memory.md`. Prior in-store entries: `shiba-memory-self-hosted-agent-memory-...` and `shiba-memory-hooks-insight-precompact-postcompact-...` (both 2026-04-09).
+
+**The hook coverage delta** — shiba ships five Claude Code hooks; mastermind ships two. The missing three are actionable targets:
+
+| Hook | Shiba | Mastermind |
+|---|---|---|
+| SessionStart | Yes | Yes |
+| PostToolUse | Write episodic memories (7-day TTL) | Partial — suggests only, doesn't write |
+| **Stop** | Update session, clean up old episodes | **No** |
+| PreCompact | Yes | Yes |
+| **PostCompact** | Re-inject key project context into compressed window | **No** |
+
+**The one worth copying first: PostCompact.** After Claude Code compaction, most of the conversation has just been lost and the agent wakes up with only the compaction summary. Shiba re-injects a curated slice of memory at that exact boundary so the post-compression agent starts informed. Mastermind's SessionStart injection does this at session boundaries; PostCompact does it at compaction boundaries, which fire more often inside long sessions. Same code path as SessionStart, tiny amount of new plumbing. **Strongest single win in the shiba reference for mastermind's day-to-day behavior.**
+
+**Six relation types**: `related, supports, contradicts, supersedes, caused_by, derived_from`, each with a strength weight. Shiba's own caveat: only `related` is auto-populated (via embedding similarity); contradiction detection is a dissimilarity proxy. **Rich schema, shallow automation** — which is the right level of ambition for mastermind. Confirms the soulforge-note proposal: add `supersedes:` and `contradicts:` as optional frontmatter fields, human-populated via `/mm-review` prompts, no auto-detection.
+
+**Tiered extraction validates mastermind's design exactly**: shiba exposes Tier 1 (regex, free) and Tier 2 (LLM, specialized sub-passes: correction detection / summarization / preference inference). Mastermind's `internal/extract/` is the same two-tier split. **One idea worth copying**: shiba doesn't run one omnibus LLM extraction pass — it runs three narrow, specialized LLM calls. Splitting mastermind's LLM backend into `detect-corrections` + `extract-decisions` + `extract-war-stories` would raise precision without raising cost. Phase 3 polish candidate.
+
+**ACT-R scoring — the upgrade path**: mastermind's current access-frequency scoring is the equivalent of shiba's "fast mode" (`1 + ln(count+1) * 0.1`). Shiba's "proper mode" uses per-access timestamps with power-law decay (`1 + ln(Σ t^(-0.5)) * 0.1`) to capture recency on top of frequency. Requires storing an array of timestamps per entry; park as a Phase 4+ option *if* ranking quality problems traceable to missing recency ever show up.
+
+**The second independent data point on verbatim-vs-extraction**: shiba publishes LongMemEval 50.2%, in the same cluster as Mem0 (49.0%). MemPalace raw-storage sits at 96.6%. Two independent extraction-based systems cluster at ~50%; raw-storage jumps to 96%. Same conclusion as the soulforge note — **mastermind shouldn't chase LongMemEval scores**; the benchmark rewards verbatim recall, which is not mastermind's job. Record the finding so future-Jean doesn't burn a weekend on it.
+
+**Where shiba and mastermind independently agreed** (this is the strongest external validation of Phase 2-3 direction we've seen so far): project scoping with same-project boost, access-frequency in the score, tiered extraction, pre-compaction capture trigger, markdown as the human-readable surface, session-start context injection, consolidation as a separate phase from capture. When two independently-designed tools converge on the same patterns, the patterns are load-bearing.
+
+**Where they diverge and must stay divergent**: Postgres vs. plain files, HTTP gateway vs. MCP-only, auto-promotion (`>0.7` confidence + 3+ accesses) vs. user-gated review, multi-tenant vs. one user. Each divergence maps directly to a hard rule in CLAUDE.md. Do not cross.
+
+### 8. mempalace — the philosophical counterpoint (added post-Phase-0)
+
+**URL**: https://github.com/milla-jovovich/mempalace
+**Local clone**: `~/Github/mempalace`
+**Role**: **NOT a translation target.** Python + ChromaDB + raw-verbatim-storage philosophy — the opposite pole from mastermind's extraction-first design. Kept as a reference specifically to keep mastermind's extraction tradeoff honest. Full notes in `docs/reference-notes/mempalace.md`.
+
+**The counterpoint**: MemPalace scored **96.6% on LongMemEval with raw verbatim storage** (no extraction, no summarization — just ChromaDB + semantic search). Their own lossy compression layer (AAAK) regresses that to 84.2%. Their thesis: *"We don't burn an LLM to decide what's worth remembering — we keep everything and let semantic search find it."*
+
+Mastermind's response (this is a re-statement for the reference-notes index; the full reasoning lives in `mempalace.md` §2): mastermind chooses extraction anyway because (a) SessionStart injection has a hard token budget verbatim storage can't meet, (b) the `/mm-review` consolidation loop IS the learning step for the ADHD target user, (c) the goal is "right lesson on a bad-memory day," not verbatim recall. But the 96.6% finding has a load-bearing implication for the extractor prompt: **bias toward high recall, not lossy summarization**. Already rolled into the `extraction` open-loop.
+
+**The one idea worth translating** (now tracked as the `memory-stack` open-loop): MemPalace's **L0-L3 memory stack** with explicit per-layer token budgets.
+
+| Layer | What | Size | When |
+|---|---|---|---|
+| L0 | Identity | ~50 tokens | Always loaded |
+| L1 | Critical facts | ~120 tokens | Always loaded |
+| L2 | On-demand recall | On demand | When topic comes up |
+| L3 | Deep search / full retrieval | On demand | Explicit |
+
+Mastermind already has this shape implicitly (open-loops header + SessionStart injection = always-loaded; `mm_search` = on-demand; direct file reads = explicit deep dive). What's missing is the explicit tiering *with documented budgets*. Adding the documentation prevents SessionStart injection creep, gives the output-trimming loop a concrete L2 target, and makes hot-path cost legible. Zero code to land the documentation; enforcement is a small follow-on.
+
+**The hook-block extraction pattern — novel but deliberately rejected**: MemPalace's hooks don't extract. They return `{"decision": "block", "reason": "AUTO-SAVE checkpoint. Save key topics..."}` and let Claude Code surface the `reason` as a system message the agent acts on in the next turn. Agent does the classification; hook does the scheduling. Clever, zero LLM cost in the hook. **Rejected for mastermind** because (a) it is intrusive UX (blocking every 15 messages violates "invisible until needed"), (b) mastermind already learned that agent cooperation is unreliable under load (see `agent-proactivity-requires-mechanical-enforcement-not-just-mcp-instructions`, 2026-04-08), and (c) it duplicates existing regex + LLM extractor work. Documented in `mempalace.md` §5 as a contrast, not a translation.
+
+**Hard rule #6 validation**: MemPalace ships **19 MCP tools** (palace read, palace write, knowledge graph, navigation, agent diary). Every one is a token in the agent's system prompt on every turn whether used or not. This is the concrete justification for mastermind's "four tools forever" cap: cognitive surface area is the constraint. MemPalace's 19 is fine for a general-audience tool; it is wrong for the ADHD single-user target.
+
+**Three-way convergence** worth noting explicitly: MemPalace + shiba-memory + mastermind all independently landed on *invalidate instead of delete* for knowledge evolution (MemPalace's `kg.invalidate()`, shiba's `supersedes` relation, mastermind's hard rule #7). Three independent memory systems converging on the same rule is load-bearing; do not drift away from it.
 
 ## Consolidated "things to NOT copy" list
 
