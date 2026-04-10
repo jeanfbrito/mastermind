@@ -342,6 +342,68 @@ live/
 
 ---
 
+## 2026-04-10 — Tiered `mm_search` fallback chain (seven classes)
+
+**Decision**: `mm_search` now sorts results by a primary `tierClass` enum (0–6), with score only used as a within-class tiebreaker. Classes:
+
+| Class | Name | Match criterion |
+|---|---|---|
+| 0 | `classExactTopic` | full query phrase appears in topic (multi-word queries only) |
+| 1 | `classExactTag` | full query phrase appears in a tag |
+| 2 | `classExactBody` | full query phrase appears in body |
+| 3 | `classTopicTokens` | all query tokens found in topic |
+| 4 | `classMetaTokens` | all query tokens found across topic + tags |
+| 5 | `classKeyword` | tokens matched in body (default keyword pipeline) |
+| 6 | `classFuzzy` | sahilm/fuzzy gap-match against topic + tags |
+
+Sort order: `class ASC → score DESC → date DESC → path ASC`. A class-0 hit strictly dominates any class-6 hit regardless of access frequency, recency, or score magnitude. Within a class, ACT-R fast-mode access boosting (`ln(accessed+1) * 0.2`, additive, capped at +0.5) breaks ties toward frequently-useful entries.
+
+**Short-circuit**: pass 2 (body loading) is skipped entirely when pass 1 (metadata-only) yields top-K results (K = min(Limit, 3)) all in class ≤ 4 AND at least one of them has `access_count ≥ 3`. The access gate is the load-bearing second condition — it prevents structural matches from short-circuiting before the entry has proven useful.
+
+**Implementation**: `internal/search/search.go`. Added:
+- `tierClass` enum and unexported `class` field on `Result` (never crosses the MCP boundary).
+- `sortResultsByTier` + `shouldShortCircuit` helpers.
+- `fuzzy.Find` from `github.com/sahilm/fuzzy` (third direct dep, zero-dep, ~300 LOC).
+- `accessBoost` switched from linear (`accessed * 0.05`, cap 0.5) to log-shaped ACT-R fast mode (`ln(accessed+1) * 0.2`, cap 0.5). One access now produces a meaningful boost (0.139 vs. 0.05); saturation still occurs well below a topic hit.
+
+**New direct dep**: `github.com/sahilm/fuzzy v0.1.1`. Selected for Sublime-style gap matching over pure Levenshtein — gap matching handles "I half-remember the topic" better than typo-only matching, which is the bad-working-memory-day failure mode mastermind is designed for. Zero-dep, MIT, small enough to keep alive for the 2034 bug.
+
+**Length guard**: the class-6 fuzzy pass skips entirely when the normalized query is fewer than 4 characters. Borrowed from engram's `internal/project/similar.go` length-scaled Levenshtein — short queries produce too much noise in fuzzy matching. For mastermind's corpus, 4 is the threshold where fuzzy hits become useful rather than distracting.
+
+**Rationale — why tiered, why now**:
+
+The previous single-pass scoring was correct but fragile. Additive boosts (2.0 topic, 0.7 tag, 0.3 body, +0.5 access cap) worked because the constants happened to enforce the "topic dominates" invariant, but tuning any one value risked inverting the ordering. A class-first sort is lock-in-by-construction: no combination of scores or boosts can make a class-6 fuzzy hit beat a class-0 exact-topic hit.
+
+Three reference repos were mined before the design was finalized (see reference-notes/):
+
+1. **engram** (`internal/store/store.go:1504-1512`) — the `Rank = -1000` sentinel pattern. When engram detects a topic_key match it assigns a synthetic rank that pins the result to the top. Translated directly: mastermind uses class enums instead of sentinel values, but the principle is identical — "this match is a different class, not just a higher score."
+2. **shiba-memory** (`schema/001_init.sql`, `007_actr_proper.sql`) — ACT-R fast-mode `1 + ln(access_count+1) * 0.1` capped at +30%. The formula shape was borrowed; the constants were adapted (0.2 and 0.5 cap) to preserve mastermind's pre-existing 0.5 access-boost budget. Also borrowed: the "earned confidence" gate from `003_instincts_tracking_gateway.sql:35,50-52` (`access_count >= 3`), which is the second condition on the pass-2 short-circuit.
+3. **mempalace** (`searcher.py:34-50`) — validated mastermind's existing metadata-pre-filter pattern (filter before body I/O). No new code borrowed, but the convergent design is worth noting: two independent projects arrived at the same insight.
+
+**Explicit non-borrow from mempalace**: the L0–L3 memory stack is a *loading convention*, not a retrieval cascade. The tiered fallback chain is retrieval-time scoring. These are orthogonal axes and must not be conflated — the L0–L3 model (see MEMORY-STACK.md) describes what's held in context at different phases of the conversation; the tier classes describe how a single `mm_search` call ranks its output.
+
+**What was rejected**:
+
+- **Body fuzzy matching**: running sahilm against entry bodies would explode false positives. The bad-day failure mode is misremembering a topic, not misremembering body prose. Body stays on stdlib keyword.
+- **Multiplicative access boost**: shiba-memory uses `score *= (1 + ln(access+1)*0.1)`. Considered, but mastermind's additive model is more transparent when debugging why an entry ranked where it did. The invariant is easier to test additively.
+- **Hand-rolled Levenshtein**: `agnivade/levenshtein` is ~100 LOC and zero-dep. But pure edit distance doesn't capture "gap match" — sahilm/fuzzy's Sublime-style matching is a strict superset of useful behavior for ~300 LOC.
+- **Project-boost as ranking multiplier** (shiba-memory's 1.3× / 0.8× for same/cross-project): bigger change, requires converting `Query.Project` from a hard filter to a soft ranking signal. Deferred to an open-loop for Phase 5+.
+- **Proper-mode ACT-R with timestamp array**: canonical `B_i = ln(Σ age_j^(-0.5))` formula would give mastermind recency-aware scoring, but requires storing a timestamp array per entry (frontmatter schema extension). Deferred to an open-loop for Phase 4+; will only be implemented if dogfooding reveals that count-only boost promotes stale-but-frequently-accessed entries.
+
+**Consequence for FORMAT.md**: None. The tier-class work is entirely internal to `internal/search/` — no frontmatter changes, no schema extensions, no new MCP tool fields. `Result.class` is unexported so it never crosses the MCP boundary.
+
+**Test coverage**: 45 tests in `internal/search/` (was 17 pre-tiered). New tests lock in:
+- `TestAccessBoost` — ACT-R fast-mode formula, monotonic, saturating, topic-dominance preserved.
+- `TestKeywordSearcherExactPhraseTiers` — classes 0/1/2 assignment.
+- `TestKeywordSearcherClassDominatesAccessBoost` — 500-access entry still loses to class-0 hit.
+- `TestKeywordSearcherKeywordClassSplit` — class 3/4/5 differentiation.
+- `TestKeywordSearcherShortCircuitFires` / `ShortCircuitNeedsEarnedAccess` — both halves of the short-circuit gate.
+- `TestKeywordSearcherFuzzyTypo` / `FuzzyGapMatch` / `FuzzyLengthGuard` / `FuzzyRanksBelowKeyword` / `FuzzyDedupes` — class 6 behavior.
+- `TestKeywordSearcherStrictClassOrderingInvariant` — end-to-end contract: six entries, six classes, strictly monotonic class order in results.
+- `TestKeywordSearcherWithinClassTiebreakByACTR` — within-class access-boost tiebreak.
+
+---
+
 ## TBD — project-personal sync strategy
 
 **Status**: Open.

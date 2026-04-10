@@ -2,7 +2,12 @@ module github.com/jeanfbrito/mastermind
 
 go 1.25.0
 
-require gopkg.in/yaml.v3 v3.0.1
+require (
+	github.com/sahilm/fuzzy v0.1.1
+	gopkg.in/yaml.v3 v3.0.1
+)
+
+require github.com/kylelemons/godebug v1.1.0 // indirect
 
 require (
 	github.com/google/jsonschema-go v0.4.2 // indirect

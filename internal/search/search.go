@@ -1,11 +1,43 @@
 // Package search provides the query layer across all three scopes.
 //
 // mastermind owns no persistent index. Every query reads EntryRef slices
-// from internal/store, applies metadata filters in memory, then loads
-// bodies on demand for the top candidates and scores them with a simple
-// keyword match. This is fast at realistic corpus sizes (sub-100ms for
-// thousands of entries on modern hardware) and has zero dependencies
-// beyond the Go standard library.
+// from internal/store, applies metadata filters in memory, then scores
+// survivors through a tiered fallback chain and returns the top N.
+//
+// # Tiered fallback
+//
+// Results are sorted primarily by a tierClass enum (0–6); score is only
+// a tiebreaker within a class. The tiers, from strictly strongest to
+// weakest match:
+//
+//   - Class 0: exact phrase in topic (multi-word queries only)
+//   - Class 1: exact phrase in a tag
+//   - Class 2: exact phrase in body (requires body load)
+//   - Class 3: all query tokens in topic
+//   - Class 4: all query tokens across topic + tags
+//   - Class 5: tokens matched in body (default keyword pipeline)
+//   - Class 6: fuzzy gap-match against topic + tags (sahilm/fuzzy)
+//
+// A class-0 hit strictly dominates any class-6 hit regardless of access
+// frequency, score magnitude, or recency. This is engram's "Rank = -1000
+// sentinel" pattern translated into Go — class is lock-in-by-construction.
+//
+// Execution is three passes:
+//  1. Pass 1 (metadata-only, no I/O) handles classes 0/1/3/4.
+//  2. Pass 2 (body load) handles classes 2/5 — skipped entirely when
+//     the short-circuit condition fires (top-K pass-1 results all in
+//     class ≤ 4 AND at least one has access_count ≥ 3, borrowed from
+//     shiba-memory's "earned confidence" gate).
+//  3. Pass 3 (fuzzy fallback) handles class 6 — only if earlier passes
+//     didn't fill the limit AND the query is ≥ 4 characters long
+//     (engram's length-guard pattern; short queries drown precision).
+//
+// Within a class, the access-frequency tiebreaker uses ACT-R fast-mode
+// base-level activation: ln(accessed+1) * 0.2, capped at +0.5. See
+// DECISIONS.md (2026-04-10) for the full reference-repo sweep that
+// informed the model. This is fast at realistic corpus sizes (sub-100ms
+// for thousands of entries) with one direct dependency beyond stdlib
+// (sahilm/fuzzy).
 //
 // The division of labor with context-mode is deliberate and important:
 //
@@ -37,9 +69,12 @@ package search
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/sahilm/fuzzy"
 
 	"github.com/jeanfbrito/mastermind/internal/format"
 	"github.com/jeanfbrito/mastermind/internal/store"
@@ -74,6 +109,33 @@ type Query struct {
 	Limit int
 }
 
+// tierClass is the primary sort key for search results. Lower class
+// values strictly dominate higher ones regardless of score: an exact-
+// phrase topic hit (classExactTopic = 0) always outranks any fuzzy hit
+// (classFuzzy = 6), even if the fuzzy hit has massive access-boost
+// inflation. Score is only a tiebreaker within a class.
+//
+// The tier classes are borrowed in spirit from engram's Rank = -1000
+// sentinel pattern (internal/store/store.go:1504-1512): instead of
+// tuning additive boosts and hoping the weights line up, use a class
+// enum so ordering is locked by construction. See DECISIONS.md for the
+// reference-repo sweep that informed this model.
+//
+// Added in T2 of the tiered-fallback work — initially every result
+// lands in classKeyword so behavior is unchanged; T3-T5 populate the
+// other classes.
+type tierClass int
+
+const (
+	classExactTopic tierClass = iota // 0: full query phrase found in topic
+	classExactTag                    // 1: full query phrase found in a tag
+	classExactBody                   // 2: full query phrase found in body text
+	classTopicTokens                 // 3: all query tokens found in topic
+	classMetaTokens                  // 4: all tokens across topic + tags
+	classKeyword                     // 5: tokens matched in body (default)
+	classFuzzy                       // 6: fuzzy topic/tag match fallback
+)
+
 // Result is a single ranked entry returned by a search.
 //
 // The body is the full file body — we return it because the typical
@@ -85,6 +147,11 @@ type Result struct {
 	Score    float64        // ranking score, higher = better match
 	Body     string         // the full markdown body (for presentation)
 	Metadata format.Metadata
+
+	// class is the tier bucket used as the primary sort key. Unexported
+	// so it never crosses the MCP boundary — callers see only the
+	// order of results, not which class produced them.
+	class tierClass
 }
 
 // Searcher is the query interface. Implementations are interchangeable
@@ -106,6 +173,14 @@ type Searcher interface {
 // of entries, megabytes of text).
 type KeywordSearcher struct {
 	Store *store.Store
+
+	// shortCircuitCount is incremented every time a Search() call
+	// skips the body-load pass because pass-1 (metadata-only) already
+	// yielded enough high-confidence results. Used by tests to verify
+	// the perf short-circuit fires at the right moments. Not thread-
+	// safe by design — mastermind runs single-request from an MCP
+	// stdio server, so there's no concurrent caller to race with.
+	shortCircuitCount int
 }
 
 // NewKeywordSearcher constructs a KeywordSearcher backed by s.
@@ -139,6 +214,16 @@ func (k *KeywordSearcher) Search(q Query) ([]Result, error) {
 	tokens := tokenize(q.QueryText)
 	if len(tokens) == 0 {
 		return nil, fmt.Errorf("search: query yielded no tokens")
+	}
+
+	// Exact-phrase detection: only meaningful for multi-word queries.
+	// A single-word "phrase" is identical to the token, so we skip the
+	// exact-phrase classes (0/1/2) and let single-word queries fall
+	// through to token-level matching directly. Normalized once here to
+	// avoid re-lowering per entry.
+	var exactPhrase string
+	if len(tokens) >= 2 {
+		exactPhrase = strings.ToLower(strings.TrimSpace(q.QueryText))
 	}
 
 	scopes := q.Scopes
@@ -176,58 +261,231 @@ func (k *KeywordSearcher) Search(q Query) ([]Result, error) {
 		filtered = append(filtered, r)
 	}
 
-	// Score each survivor. First pass: topic + tags (no body needed).
-	// If that's unsatisfied, load body and rescore.
+	// Two-pass scoring pipeline.
+	//
+	// Pass 1 is metadata-only: no body reads. It handles classes
+	// 0 (exact topic), 1 (exact tag), 3 (all tokens in topic),
+	// 4 (all tokens across topic+tags). Any entry whose tokens are
+	// fully satisfied by metadata goes into a pass-1 result directly.
+	//
+	// Pass 2 handles classes 2 (exact body phrase) and 5 (body
+	// keyword match) — it loads the body for entries that pass 1
+	// couldn't classify. Pass 2 is skipped entirely when the short-
+	// circuit condition fires: top-K pass-1 results are all in
+	// class ≤ 4 AND at least one has access_count ≥ 3 ("earned"
+	// confidence, borrowed from shiba-memory's instinct-evolution
+	// gate). The access gate prevents structural matches from
+	// short-circuiting before the entry has proven useful.
+	type bodyCandidate struct {
+		ref          store.EntryRef
+		topicHits    int // tokens found in topic
+		metaHits     int // tokens found in topic or tags (topic wins)
+		topicTagBase float64
+	}
+
 	results := make([]Result, 0, len(filtered))
+	bodyNeeded := make([]bodyCandidate, 0, len(filtered))
+
 	for _, r := range filtered {
-		topicTagScore := scoreTopicAndTags(r.Metadata, tokens)
+		topicLower := strings.ToLower(r.Metadata.Topic)
+		tagBlob := strings.ToLower(strings.Join(r.Metadata.Tags, " "))
 
-		var body string
-		bodyScore := 0.0
-		if topicTagScore < float64(len(tokens)) {
-			// Not every token was found in metadata. Load body.
-			entry, err := k.Store.LoadRef(r)
-			if err != nil {
-				// Malformed file; skip silently. The list layer
-				// already handles most of this.
-				continue
-			}
-			body = entry.Body
-			bodyScore = scoreBody(body, tokens)
-		}
-
-		score := topicTagScore + bodyScore
-		if score <= 0 {
+		// Tier 0: exact phrase in topic.
+		if exactPhrase != "" && strings.Contains(topicLower, exactPhrase) {
+			results = append(results, Result{
+				Ref:      r,
+				Score:    5.0 + accessBoost(r.Metadata.Accessed),
+				Metadata: r.Metadata,
+				class:    classExactTopic,
+			})
 			continue
 		}
-		// Access frequency boost: frequently useful entries rank
-		// slightly higher. Capped at +0.5 so it's a tiebreaker,
-		// never overrides topic relevance (2.0 per token).
-		score += accessBoost(r.Metadata.Accessed)
-		results = append(results, Result{
-			Ref:      r,
-			Score:    score,
-			Body:     body,
-			Metadata: r.Metadata,
+		// Tier 1: exact phrase in tags.
+		if exactPhrase != "" && strings.Contains(tagBlob, exactPhrase) {
+			results = append(results, Result{
+				Ref:      r,
+				Score:    4.0 + accessBoost(r.Metadata.Accessed),
+				Metadata: r.Metadata,
+				class:    classExactTag,
+			})
+			continue
+		}
+
+		// Per-token classification: how many tokens hit topic vs.
+		// (topic or tags). Topic wins on ties — a token in both is
+		// counted in topicHits. This drives the class 3 vs. 4 split.
+		topicHits, metaHits := 0, 0
+		var topicTagScore float64
+		for _, tok := range tokens {
+			if tok == "" {
+				continue
+			}
+			if strings.Contains(topicLower, tok) {
+				topicHits++
+				metaHits++
+				topicTagScore += 2.0
+				continue
+			}
+			if strings.Contains(tagBlob, tok) {
+				metaHits++
+				topicTagScore += 0.7
+			}
+		}
+
+		nTokens := len(tokens)
+
+		// Tier 3: every token found in topic. Metadata-only,
+		// no body load needed. Highest keyword-class confidence.
+		if topicHits == nTokens {
+			results = append(results, Result{
+				Ref:      r,
+				Score:    topicTagScore + accessBoost(r.Metadata.Accessed),
+				Metadata: r.Metadata,
+				class:    classTopicTokens,
+			})
+			continue
+		}
+
+		// Tier 4: every token found across topic + tags (but not
+		// all in topic alone). Still no body read required.
+		if metaHits == nTokens {
+			results = append(results, Result{
+				Ref:      r,
+				Score:    topicTagScore + accessBoost(r.Metadata.Accessed),
+				Metadata: r.Metadata,
+				class:    classMetaTokens,
+			})
+			continue
+		}
+
+		// Otherwise: we need the body to either complete keyword
+		// coverage (class 5) or check for exact phrase (class 2).
+		// Defer to pass 2 so short-circuit can skip it.
+		bodyNeeded = append(bodyNeeded, bodyCandidate{
+			ref:          r,
+			topicHits:    topicHits,
+			metaHits:     metaHits,
+			topicTagBase: topicTagScore,
 		})
 	}
 
-	// Rank: higher score first; tiebreaker is date descending (newer
-	// entries win ties), then path ascending (deterministic).
-	sort.Slice(results, func(i, j int) bool {
-		if results[i].Score != results[j].Score {
-			return results[i].Score > results[j].Score
+	// ── Pass 1 sort (so we can check short-circuit confidence) ──
+	sortResultsByTier(results)
+
+	// Short-circuit: if pass 1 already has high-confidence hits that
+	// the user has accessed before, skip the expensive body-load pass.
+	// Confidence rules:
+	//   - top-K results (K = min(Limit, 3)) must all be class ≤ 4
+	//   - at least one of those must have access_count ≥ 3 ("earned")
+	if shouldShortCircuit(results, q.Limit) {
+		k.shortCircuitCount++
+	} else {
+		// ── Pass 2: body load + class 2/5 scoring ──
+		for _, c := range bodyNeeded {
+			entry, err := k.Store.LoadRef(c.ref)
+			if err != nil {
+				// Malformed file; skip silently.
+				continue
+			}
+			body := entry.Body
+			bodyLower := strings.ToLower(body)
+
+			// Tier 2: exact phrase in body.
+			if exactPhrase != "" && strings.Contains(bodyLower, exactPhrase) {
+				results = append(results, Result{
+					Ref:      c.ref,
+					Score:    3.0 + accessBoost(c.ref.Metadata.Accessed),
+					Body:     body,
+					Metadata: c.ref.Metadata,
+					class:    classExactBody,
+				})
+				continue
+			}
+
+			// Tier 5: body keyword scoring.
+			bodyScore := scoreBody(body, tokens)
+			score := c.topicTagBase + bodyScore
+			if score <= 0 {
+				continue
+			}
+			score += accessBoost(c.ref.Metadata.Accessed)
+			results = append(results, Result{
+				Ref:      c.ref,
+				Score:    score,
+				Body:     body,
+				Metadata: c.ref.Metadata,
+				class:    classKeyword,
+			})
 		}
-		if results[i].Metadata.Date != results[j].Metadata.Date {
-			return results[i].Metadata.Date > results[j].Metadata.Date
-		}
-		return results[i].Ref.Path < results[j].Ref.Path
-	})
+		// Re-sort after pass-2 additions.
+		sortResultsByTier(results)
+	}
+
+	// results are already sorted by sortResultsByTier (in pass 1 for
+	// short-circuit, then re-sorted in pass 2 if body candidates were
+	// processed). The comparator is: class ASC → score DESC →
+	// date DESC → path ASC. See sortResultsByTier below.
 
 	limit := q.Limit
 	if limit <= 0 {
 		limit = 10
 	}
+
+	// ── Pass 3: fuzzy topic/tag fallback (class 6) ──
+	//
+	// Runs only when earlier tiers didn't fill the limit AND the query
+	// is long enough to produce meaningful fuzzy hits. Engram's
+	// internal/project/similar.go taught us the length guard: short
+	// queries ("go", "io") fuzzy-match too many things and drown
+	// precision. For mastermind, the cutoff is len(query) >= 4 —
+	// enough for a realistic typo-corrected word ("hook", "extr").
+	//
+	// Only metadata is fuzzy-matched (topic + tags blob). Body fuzzy
+	// is deliberately rejected: fuzzy on prose explodes false
+	// positives, and mastermind's "bad working-memory day" failure
+	// mode is misremembering the *topic*, not the body. See
+	// DECISIONS.md for the rejection rationale.
+	normalizedQuery := strings.ToLower(strings.TrimSpace(q.QueryText))
+	if len(results) < limit && len(normalizedQuery) >= 4 {
+		seen := make(map[string]bool, len(results))
+		for _, r := range results {
+			seen[r.Ref.Path] = true
+		}
+		haystack := make([]string, 0, len(filtered))
+		refIndex := make([]store.EntryRef, 0, len(filtered))
+		for _, r := range filtered {
+			if seen[r.Path] {
+				continue
+			}
+			blob := strings.ToLower(r.Metadata.Topic + " " + strings.Join(r.Metadata.Tags, " "))
+			haystack = append(haystack, blob)
+			refIndex = append(refIndex, r)
+		}
+		matches := fuzzy.Find(normalizedQuery, haystack)
+		for _, m := range matches {
+			if len(results) >= limit {
+				break
+			}
+			ref := refIndex[m.Index]
+			// Heavy discount: the class 6 sort-position already
+			// guarantees fuzzy hits land below any class 0-5 match.
+			// Within class 6, sahilm's score orders by match quality.
+			// We cap at 0.5 so fuzzy scores never approach the
+			// keyword-class range in downstream consumers.
+			fuzzyScore := float64(m.Score) / 100.0
+			if fuzzyScore > 0.5 {
+				fuzzyScore = 0.5
+			}
+			results = append(results, Result{
+				Ref:      ref,
+				Score:    fuzzyScore + accessBoost(ref.Metadata.Accessed),
+				Metadata: ref.Metadata,
+				class:    classFuzzy,
+			})
+		}
+		sortResultsByTier(results)
+	}
+
 	if len(results) > limit {
 		results = results[:limit]
 	}
@@ -360,19 +618,106 @@ func scoreBody(body string, tokens []string) float64 {
 }
 
 // accessBoost returns a small score bonus based on how many times an
-// entry has been returned by previous searches. The bonus uses
-// diminishing returns: 1 access = 0.05, 10 = 0.5 (cap). This ensures
-// frequently useful entries float up slightly without ever overriding
-// topic relevance (2.0 per token).
+// entry has been returned by previous searches.
+//
+// The shape is ACT-R "fast mode" base-level activation, borrowed from
+// shiba-memory's 007_actr_proper.sql: a log of the access count. This
+// rewards even a single access meaningfully (one access already proves
+// the entry was useful once) and saturates quickly (the difference
+// between 100 and 1000 accesses is negligible). Concretely:
+//
+//	accessed=1  → 0.139
+//	accessed=5  → 0.358
+//	accessed=10 → 0.479
+//	accessed=12 → 0.497 (approaches cap)
+//	accessed=20 → 0.5 (hard cap)
+//
+// The 0.5 cap preserves the load-bearing ranking invariant: a single
+// topic hit (2.0 per token) always dominates any combination of access
+// boost + tag + body. See TestKeywordSearcherRankingFavorsTopicOverBody.
+//
+// Why log-shaped instead of linear (the previous formula was
+// accessed * 0.05 capped at 0.5): linear reached the cap in exactly
+// 10 steps and treated the first access the same as the tenth
+// (+0.05 each). Log shape front-loads the reward — one access moves
+// the entry noticeably, subsequent accesses move it less — which
+// matches ACT-R's intuition that repeated activations of an already-
+// familiar item contribute diminishingly. Shiba-memory proved out
+// this formula shape in a similar memory-retrieval context.
 func accessBoost(accessed int) float64 {
 	if accessed <= 0 {
 		return 0
 	}
-	boost := float64(accessed) * 0.05
+	boost := math.Log(float64(accessed)+1) * 0.2
 	if boost > 0.5 {
 		return 0.5
 	}
 	return boost
+}
+
+// sortResultsByTier orders results by the tiered-fallback comparator:
+// class ASC (strictly dominant) → score DESC → date DESC → path ASC
+// (deterministic). Pulled out of Search() so pass 1 can check the
+// short-circuit condition on a sorted slice before deciding whether
+// pass 2 is needed.
+func sortResultsByTier(results []Result) {
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].class != results[j].class {
+			return results[i].class < results[j].class
+		}
+		if results[i].Score != results[j].Score {
+			return results[i].Score > results[j].Score
+		}
+		if results[i].Metadata.Date != results[j].Metadata.Date {
+			return results[i].Metadata.Date > results[j].Metadata.Date
+		}
+		return results[i].Ref.Path < results[j].Ref.Path
+	})
+}
+
+// shouldShortCircuit returns true when pass-1 metadata-only results
+// already meet the confidence bar, so pass 2 (body loading) can be
+// skipped entirely. Rules:
+//
+//  1. The top-K results (K = min(limit, 3)) must all be in class ≤ 4
+//     (classExactTopic/ExactTag/TopicTokens/MetaTokens — all structural
+//     metadata hits).
+//  2. At least one of those must have access_count ≥ 3 ("earned"
+//     confidence — borrowed from shiba-memory's instinct-evolution
+//     gate at 003_instincts_tracking_gateway.sql:35,50-52).
+//
+// The access gate is the critical second condition. Without it, any
+// structural match would short-circuit regardless of whether the
+// entry has ever been useful — we'd risk burying genuinely better
+// body matches behind stale topic hits. Requiring access_count ≥ 3
+// means the short-circuit only fires when the user's own history
+// has validated one of the pass-1 hits as actually useful.
+//
+// Results must be sorted before this is called.
+func shouldShortCircuit(results []Result, limit int) bool {
+	if limit <= 0 {
+		limit = 10
+	}
+	k := limit
+	if k > 3 {
+		k = 3
+	}
+	if len(results) < k {
+		return false
+	}
+	// Rule 1: top-K must all be class ≤ 4.
+	for i := 0; i < k; i++ {
+		if results[i].class > classMetaTokens {
+			return false
+		}
+	}
+	// Rule 2: at least one of those must be "earned" (access_count ≥ 3).
+	for i := 0; i < k; i++ {
+		if results[i].Metadata.Accessed >= 3 {
+			return true
+		}
+	}
+	return false
 }
 
 // tokenize splits a query string into lowercase tokens. Tokens are

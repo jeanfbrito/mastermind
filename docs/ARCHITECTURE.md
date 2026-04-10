@@ -162,25 +162,56 @@ If Claude Code's hook API surface doesn't support these exact lifecycle events, 
 
 ## Retrieval flow
 
-1. Agent calls `mm_search("electron ipc weird behavior")`.
-2. mastermind reads from all three stores (or the configured subset).
-3. Each markdown file was indexed into context-mode's FTS5 on startup with a source label:
-   - `mm:user` for `~/.knowledge/lessons/`
-   - `mm:user-archive` for `~/.knowledge/archive/` (only loaded when `include_archive=true`)
-   - `mm:project-shared:<repo>` for `<repo>/.knowledge/nodes/`
-   - `mm:project-personal:<repo>` for Claude auto-memory
-4. FTS5 returns ranked hits. mastermind merges, dedupes trivially by path, and returns source-tagged results.
+`mm_search` runs a stdlib-only keyword matcher with a tiered fallback chain. Implementation in `internal/search/search.go`; full rationale in DECISIONS.md (2026-04-10 entry).
 
-No custom retrieval logic. FTS5 keyword ranking is enough at the corpus sizes we expect (thousands of entries, megabytes of text). If it ever stops being enough, add re-ranking later.
+1. Agent calls `mm_search("hook extraction")`.
+2. mastermind reads entry refs from all three stores (or the configured subset). Frontmatter is parsed by `internal/store` during listing; bodies are not loaded yet.
+3. A metadata-only filter drops any ref that fails the kind/project/tags filters (cheap — no body reads).
+4. Each surviving ref is run through the tiered scoring pipeline. Results are sorted by tier class first, score second.
+
+### Tier classes (primary sort key)
+
+| Class | Name | Match criterion |
+|---|---|---|
+| 0 | `classExactTopic` | full query phrase appears in topic (multi-word queries only) |
+| 1 | `classExactTag` | full query phrase appears in a tag |
+| 2 | `classExactBody` | full query phrase appears in body (pass 2) |
+| 3 | `classTopicTokens` | all query tokens found in topic |
+| 4 | `classMetaTokens` | all query tokens found across topic + tags |
+| 5 | `classKeyword` | tokens matched in body (pass 2, default keyword pipeline) |
+| 6 | `classFuzzy` | sahilm/fuzzy gap-match against topic + tags (pass 3 fallback) |
+
+Sort order: `class ASC → score DESC → date DESC → path ASC`. A class-0 hit strictly dominates any class-6 hit regardless of access frequency, recency, or score magnitude. This is the "engram `Rank = -1000` sentinel pattern" — class is lock-in-by-construction, not a tuning parameter.
+
+### Within-class ranking
+
+Inside a single class, `score` breaks ties. Score is the additive sum of:
+- Topic-token weight (2.0 per matched token)
+- Tag-token weight (0.7 per matched token, topic wins on duplicate hits)
+- Body-keyword weight (0.3 per hit, log-diminishing up to ~0.75 per token, pass 2 only)
+- ACT-R fast-mode access boost: `ln(accessed+1) * 0.2`, additive, capped at +0.5 (borrowed from shiba-memory)
+
+The 0.5 access-boost cap preserves the load-bearing invariant that a single topic hit (2.0) strictly dominates any combination of tag + body + access boost within the same class.
+
+### Three-pass execution
+
+- **Pass 1** (metadata-only, no body I/O): handles classes 0, 1, 3, 4. Every ref is tested against topic and tag strings only.
+- **Pass 2** (body load): handles classes 2 and 5. Runs only on refs that pass 1 could not classify into a meta-only class. **Skipped entirely** when the short-circuit condition fires: top-K pass-1 results (K = min(Limit, 3)) are all in class ≤ 4 AND at least one has `access_count ≥ 3`. The access gate (borrowed from shiba-memory's `003_instincts_tracking_gateway.sql`) prevents structural matches from short-circuiting before the entry has proven useful.
+- **Pass 3** (fuzzy fallback): handles class 6. Runs only when earlier passes returned fewer results than the limit AND the normalized query is ≥ 4 characters (engram's length-guard pattern — short queries drown precision). Uses `sahilm/fuzzy.Find` against a per-entry `topic + " " + tags` blob. Body fuzzy is deliberately rejected; see DECISIONS.md.
+
+After all passes, results are sorted one final time and truncated to `Query.Limit` (default 10). Bodies for top-N results are lazily loaded for presentation (so class 3/4 metadata-only hits can still render body excerpts via `BodyExcerpt`).
+
+No custom retrieval logic beyond stdlib and `sahilm/fuzzy`. No persistent index — every query re-reads the corpus from disk via `internal/store`, which holds an ephemeral mtime-keyed in-memory cache. This is fast (sub-100ms) at realistic corpus sizes (thousands of entries, megabytes of text).
+
+**Relationship to context-mode**: mastermind does NOT index into context-mode. The synergy is passive — context-mode automatically indexes any MCP tool's output as session content, so `mm_search` results are re-findable within the session via context-mode without mastermind being involved. See hard rule #4 in CLAUDE.md.
 
 ## Indexing flow
 
-On MCP server startup (or on a file-change watch):
-1. Glob all `.md` files across configured store paths.
-2. For each file, call context-mode's `ctx_index(content, source)` with the appropriate source label.
-3. Keep a small in-memory map of `path → source → last-modified` so subsequent starts are incremental.
+None. mastermind owns no persistent index and builds nothing at startup.
 
-No separate database. mastermind owns zero persistent state beyond the markdown files themselves. FTS5 is context-mode's concern.
+Every query walks the filesystem fresh. `internal/store` caches parsed `EntryRef` slices keyed by directory mtime — if a directory hasn't changed since the last listing, the cached slice is reused. The cache is ephemeral in-memory only; nothing touches disk beyond the markdown files themselves.
+
+See CLAUDE.md hard rule #3: "No persistent index. Files on disk are the database."
 
 ## Writes: always through pending/
 
