@@ -90,6 +90,12 @@ func main() {
 				os.Exit(1)
 			}
 			return
+		case "stop":
+			if err := runStop(); err != nil {
+				fmt.Fprintf(os.Stderr, "mastermind stop: %s\n", err)
+				os.Exit(1)
+			}
+			return
 		case "suggest":
 			if err := runSuggest(); err != nil {
 				fmt.Fprintf(os.Stderr, "mastermind suggest: %s\n", err)
@@ -1248,6 +1254,7 @@ Usage:
   mastermind extract            Extract knowledge from a conversation transcript
   mastermind extract-audit      Measure extractor recall/precision against a labeled corpus
   mastermind suggest            PostToolUse hook — nudge when knowledge exists for a file
+  mastermind stop               Claude Code Stop hook — append session telemetry to ~/.knowledge/logs/sessions.jsonl
   mastermind discover           Mine git history + codebase for knowledge (Haiku / OpenAI-compat)
   mastermind version            Print version and exit
   mastermind help               Show this help
