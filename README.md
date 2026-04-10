@@ -132,7 +132,7 @@ mastermind ships three Claude Code slash commands for manual workflows:
 | Skill | Trigger | Description |
 |-------|---------|-------------|
 | **mm-extract** | `/mm-extract` | Review the conversation and extract all lessons, decisions, patterns into mastermind |
-| **mm-review** | `/mm-review` | Review pending entries one at a time — promote, reject, edit, or skip |
+| **mm-review** | `/mm-review` | Verify pending entries against their sources (commits/files), auto-promote clean ones, auto-reject hallucinations, escalate only ambiguous cases to you |
 | **mm-discover** | `/mm-discover [git\|codebase\|all]` | Mine the codebase and git history for knowledge using Haiku subagents (near-zero cost) |
 
 Install by symlinking into your Claude Code skills directory:
