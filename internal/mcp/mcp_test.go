@@ -179,6 +179,129 @@ func TestHandleSearchForwardsFilters(t *testing.T) {
 	}
 }
 
+func TestHandleSearchBatchQueries(t *testing.T) {
+	srv, s := newTestServer(t)
+
+	// Seed two distinct entries so each query can match one of them.
+	for _, e := range []*format.Entry{
+		{
+			Metadata: format.Metadata{
+				Date: "2026-04-04", Project: "mastermind",
+				Topic: "electron ipc debugging", Kind: format.KindLesson,
+				Scope: format.ScopeUserPersonal,
+			},
+			Body: "notes about IPC",
+		},
+		{
+			Metadata: format.Metadata{
+				Date: "2026-04-04", Project: "mastermind",
+				Topic: "golang module tidy quirks", Kind: format.KindLesson,
+				Scope: format.ScopeUserPersonal,
+			},
+			Body: "notes about go modules",
+		},
+	} {
+		p, err := s.Write(e)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Promote(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	_, out, err := srv.handleSearch(context.Background(), nil, SearchInput{
+		Queries: []string{"electron", "golang"},
+	})
+	if err != nil {
+		t.Fatalf("handleSearch: %v", err)
+	}
+	// One hit per query, two queries → count of 2.
+	if out.Count != 2 {
+		t.Errorf("Count = %d, want 2", out.Count)
+	}
+	// Markdown must contain both per-query H2 headings — this is how
+	// callers (and context-mode's session indexer) distinguish result
+	// blocks in batch mode.
+	if !strings.Contains(out.Markdown, `## mm_search: "electron"`) {
+		t.Errorf("batch markdown missing electron heading:\n%s", out.Markdown)
+	}
+	if !strings.Contains(out.Markdown, `## mm_search: "golang"`) {
+		t.Errorf("batch markdown missing golang heading:\n%s", out.Markdown)
+	}
+	// Both result topics must appear.
+	if !strings.Contains(out.Markdown, "electron ipc debugging") {
+		t.Error("batch markdown missing electron result")
+	}
+	if !strings.Contains(out.Markdown, "golang module tidy quirks") {
+		t.Error("batch markdown missing golang result")
+	}
+}
+
+func TestHandleSearchBatchEmptyStringFiltered(t *testing.T) {
+	// Empty strings inside a batch should be dropped, not cause
+	// errors. This is the common case when a caller builds the
+	// query list programmatically and some candidates collapse.
+	srv, s := newTestServer(t)
+
+	entry := &format.Entry{
+		Metadata: format.Metadata{
+			Date: "2026-04-04", Project: "mastermind",
+			Topic: "electron thing", Kind: format.KindLesson,
+			Scope: format.ScopeUserPersonal,
+		},
+		Body: "body",
+	}
+	p, err := s.Write(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Promote(p); err != nil {
+		t.Fatal(err)
+	}
+
+	_, out, err := srv.handleSearch(context.Background(), nil, SearchInput{
+		Queries: []string{"electron", ""},
+	})
+	if err != nil {
+		t.Fatalf("handleSearch: %v", err)
+	}
+	if out.Count != 1 {
+		t.Errorf("Count = %d, want 1", out.Count)
+	}
+}
+
+func TestHandleSearchQueryAndQueriesBothFails(t *testing.T) {
+	srv, _ := newTestServer(t)
+	_, _, err := srv.handleSearch(context.Background(), nil, SearchInput{
+		Query:   "electron",
+		Queries: []string{"golang"},
+	})
+	if err == nil {
+		t.Error("both query and queries set: expected error, got nil")
+	}
+	if err != nil && !strings.Contains(err.Error(), "either") {
+		t.Errorf("error message = %q, want mention of 'either'", err.Error())
+	}
+}
+
+func TestHandleSearchBothEmptyFails(t *testing.T) {
+	srv, _ := newTestServer(t)
+	// Neither field set — must error.
+	_, _, err := srv.handleSearch(context.Background(), nil, SearchInput{})
+	if err == nil {
+		t.Error("neither query nor queries set: expected error, got nil")
+	}
+	// Queries slice with only empty strings — must also error
+	// (trimNonEmpty drops them, leaving an effectively empty batch).
+	_, _, err = srv.handleSearch(context.Background(), nil, SearchInput{
+		Queries: []string{"", ""},
+	})
+	if err == nil {
+		t.Error("queries slice of empty strings: expected error, got nil")
+	}
+}
+
 // ─── mm_write handler ─────────────────────────────────────────────────
 
 func TestHandleWriteLandsInLive(t *testing.T) {

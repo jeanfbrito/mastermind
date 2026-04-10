@@ -42,6 +42,17 @@ Call at the start of any non-trivial task and whenever the user
 references prior work. Returns ranked markdown results with per-entry
 sections. Supports optional filters by scope, kind, project, and tags.
 
+Two input shapes are supported — exactly one must be provided:
+  - query: single query string (original shape, back-compat).
+  - queries: array of query strings, all run in a single call. Each
+    query gets its own ranked result block in the output markdown,
+    separated by its own H2 heading. Use when you want multiple
+    angles on a task in one round-trip (e.g. ["auth middleware",
+    "session tokens", "jwt expiry"]) — avoids N serial tool calls.
+    Every query runs the full tiered fallback pipeline independently;
+    filters (scopes, kinds, project, tags, limit, expand) apply to
+    every query uniformly.
+
 Body verbosity is controlled by the expand field (L2/L3 in the
 mastermind memory stack):
   - expand omitted or false (default, L2): returns topic + first ##
@@ -55,17 +66,18 @@ Prefer the default (expand omitted) for session-start queries and
 broad topic sweeps. Use expand:true when you have a specific entry
 in mind and need its full text.`
 
-// SearchInput is the wire schema for mm_search. Fields are optional
-// except Query. Every field has a jsonschema tag so the SDK can
-// publish an accurate schema to clients.
+// SearchInput is the wire schema for mm_search. All fields are
+// optional at the schema level; runtime validation enforces that
+// exactly one of Query or Queries is non-empty.
 type SearchInput struct {
-	Query          string   `json:"query" jsonschema:"natural language or keyword query; required"`
+	Query          string   `json:"query,omitempty" jsonschema:"single query string; exactly one of query or queries is required"`
+	Queries        []string `json:"queries,omitempty" jsonschema:"array of query strings for batch search; each runs the full tiered fallback independently and gets its own markdown section in the response"`
 	Scopes         []string `json:"scopes,omitempty" jsonschema:"optional scope filter: user-personal, project-shared, project-personal"`
 	Kinds          []string `json:"kinds,omitempty" jsonschema:"optional kind filter: lesson, insight, war-story, decision, pattern, open-loop"`
 	Project        string   `json:"project,omitempty" jsonschema:"optional project name filter (case-insensitive)"`
 	Tags           []string `json:"tags,omitempty" jsonschema:"optional tag filter; ALL listed tags must be present (AND semantics)"`
 	IncludePending bool     `json:"include_pending,omitempty" jsonschema:"if true, also search pending/ (unreviewed candidates); default false"`
-	Limit          int      `json:"limit,omitempty" jsonschema:"max results; default 10"`
+	Limit          int      `json:"limit,omitempty" jsonschema:"max results per query; default 10"`
 	Expand         bool     `json:"expand,omitempty" jsonschema:"if true, return full body (L3 deep dive); default false returns trimmed excerpt (L2)"`
 }
 
@@ -74,35 +86,118 @@ type SearchInput struct {
 // context-mode's automatic session indexing (per-result H3 headings let
 // context-mode chunk it cleanly so warm follow-ups within the same
 // session can be answered from the cache without re-calling mastermind).
+//
+// For batch mode (queries array), Markdown is the concatenation of
+// per-query result blocks separated by blank lines; Count is the sum
+// across all queries. Shape is unchanged vs. the single-query path —
+// backward compatible.
 type SearchOutput struct {
-	Markdown string `json:"markdown" jsonschema:"markdown-formatted ranked results with per-entry H3 sections"`
-	Count    int    `json:"count" jsonschema:"number of results returned after ranking and limit"`
+	Markdown string `json:"markdown" jsonschema:"markdown-formatted ranked results with per-entry H3 sections (concatenated across batch queries if any)"`
+	Count    int    `json:"count" jsonschema:"total number of results returned across all queries after ranking and limit"`
 }
 
 func (s *Server) handleSearch(ctx context.Context, req *mcpsdk.CallToolRequest, in SearchInput) (*mcpsdk.CallToolResult, SearchOutput, error) {
-	q := search.Query{
-		QueryText:      in.Query,
+	// Exactly-one-of validation: callers must supply either query or
+	// queries, not both and not neither. Enforced at runtime because
+	// the SDK's reflection-generated schema can't express a oneOf
+	// constraint against struct fields cleanly.
+	queries, err := collectSearchQueries(in)
+	if err != nil {
+		return nil, SearchOutput{}, fmt.Errorf("mm_search: %w", err)
+	}
+
+	// Build the common Query template once — filters and limit apply
+	// uniformly to every query in the batch.
+	base := search.Query{
 		Project:        in.Project,
 		Tags:           in.Tags,
 		IncludePending: in.IncludePending,
 		Limit:          in.Limit,
 	}
 	for _, scope := range in.Scopes {
-		q.Scopes = append(q.Scopes, format.Scope(scope))
+		base.Scopes = append(base.Scopes, format.Scope(scope))
 	}
 	for _, kind := range in.Kinds {
-		q.Kinds = append(q.Kinds, format.Kind(kind))
+		base.Kinds = append(base.Kinds, format.Kind(kind))
 	}
 
-	results, err := s.opts.Searcher.Search(q)
-	if err != nil {
-		return nil, SearchOutput{}, fmt.Errorf("mm_search: %w", err)
+	var (
+		out       SearchOutput
+		mdBuilder []string
+	)
+	for _, qt := range queries {
+		q := base
+		q.QueryText = qt
+		results, err := s.opts.Searcher.Search(q)
+		if err != nil {
+			return nil, SearchOutput{}, fmt.Errorf("mm_search %q: %w", qt, err)
+		}
+		mdBuilder = append(mdBuilder, search.FormatResultsMarkdown(qt, results, in.Expand))
+		out.Count += len(results)
 	}
+	out.Markdown = joinMarkdownBlocks(mdBuilder)
+	return nil, out, nil
+}
 
-	return nil, SearchOutput{
-		Markdown: search.FormatResultsMarkdown(in.Query, results, in.Expand),
-		Count:    len(results),
-	}, nil
+// collectSearchQueries normalizes the input into a slice of query
+// strings to run. Enforces the exactly-one-of rule: either Query
+// is non-empty OR Queries contains at least one non-empty string,
+// but not both.
+func collectSearchQueries(in SearchInput) ([]string, error) {
+	singleSet := in.Query != ""
+	batch := trimNonEmpty(in.Queries)
+	batchSet := len(batch) > 0
+
+	switch {
+	case singleSet && batchSet:
+		return nil, fmt.Errorf("provide either query or queries, not both")
+	case singleSet:
+		return []string{in.Query}, nil
+	case batchSet:
+		return batch, nil
+	default:
+		return nil, fmt.Errorf("empty query text")
+	}
+}
+
+// trimNonEmpty returns a copy of in with empty/whitespace-only
+// entries removed. Used so a caller passing `queries: ["foo", ""]`
+// doesn't trigger the search package's empty-query error on the
+// second element.
+func trimNonEmpty(in []string) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if s == "" {
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
+}
+
+// joinMarkdownBlocks concatenates per-query result blocks with a
+// blank line between them. A single-query caller gets the exact
+// same bytes as before (no leading/trailing separator).
+func joinMarkdownBlocks(blocks []string) string {
+	switch len(blocks) {
+	case 0:
+		return ""
+	case 1:
+		return blocks[0]
+	}
+	// Multi-block: join with a blank line, and ensure each block
+	// ends in exactly one newline so the separator lands cleanly.
+	var out string
+	for i, b := range blocks {
+		if i > 0 {
+			out += "\n"
+		}
+		out += b
+	}
+	return out
 }
 
 // ─── mm_write ───────────────────────────────────────────────────────────

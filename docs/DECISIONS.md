@@ -404,6 +404,33 @@ Three reference repos were mined before the design was finalized (see reference-
 
 ---
 
+## 2026-04-10 — Batch `mm_search` via `queries` array (schema extension)
+
+**Decision**: Extend the `mm_search` MCP tool to accept `queries: []string` alongside the existing `query: string` field. Exactly one of the two must be provided — runtime validation, not a JSONSchema oneOf (the reflection-generated schema can't express it cleanly for our SDK, and LLM clients don't enforce oneOf anyway). Each query in the batch runs the full tiered fallback pipeline independently; filters and limit apply uniformly; per-query results are concatenated into the single `Markdown` output field separated by their own `## mm_search: "<query>"` H2 headings.
+
+**Implementation**: `internal/mcp/tools.go`. Added `Queries` field to `SearchInput` (with `omitempty` so the reflection-generated schema makes both fields optional — required-ness is enforced at runtime instead). New helpers `collectSearchQueries`, `trimNonEmpty`, `joinMarkdownBlocks`. Empty strings inside a `queries` array are filtered (no error) so programmatically-built query lists can drop candidates without tripping the empty-query guard.
+
+**Why not four new tools**: Hard rule #6 is "four MCP tools forever." Adding a dedicated `mm_search_batch` would violate the rule. A schema extension to an existing tool is idiomatic and stays within the rule — the rule constrains tool count, not input-shape evolution. When the tool's schema changes, old clients keep working because the new field is optional and the validation falls back to the old single-query path.
+
+**Why concatenated markdown, not per-query output struct**: Simplicity. The markdown already carries per-query structure via the `## mm_search: "<query>"` headings, which context-mode's automatic session indexing can chunk for warm follow-ups just like it did before. Adding a `Queries []QueryResult` field to `SearchOutput` would duplicate structure the markdown already exposes, complicate the schema, and break existing scripts that parse `out.Count` as "total results returned" (which now sums across all queries — still correct semantically).
+
+**Why not a `sf --headless`-style hard separator between blocks**: Two tradeoffs considered. Explicit separators (`---\n`, `\x00\x00`, etc.) would make machine-parsing easier but uglier for human reading. Preserving the existing H2-per-query structure achieves both — human-readable AND machine-parseable by splitting on `\n## mm_search: "`. Callers that need strict scripting should use the CLI with `--json` (Item 3) rather than parsing MCP output.
+
+**Rejected alternatives**:
+- **Per-query limit**: considered letting batch callers specify `limit` per query (e.g., `[{query: "a", limit: 3}, {query: "b", limit: 10}]`). Rejected — adds complexity, and the common case is "same N results for each angle." Callers who need heterogeneous limits can make two calls.
+- **Concurrent per-query execution**: considered running batch queries in parallel goroutines. Rejected — the searcher already completes each query in sub-100ms on realistic corpora, and the `KeywordSearcher.shortCircuitCount` field is not thread-safe by design (documented as such). Sequential keeps the debug path simple.
+- **Requiring `Queries` to always be used (deprecate `Query`)**: rejected — breaks every existing caller. Backward compatibility is the whole point of the optional-field design.
+
+**Test coverage**: 4 new tests in `internal/mcp/mcp_test.go`:
+- `TestHandleSearchBatchQueries` — multi-query hits land in separate H2 blocks, Count sums correctly.
+- `TestHandleSearchBatchEmptyStringFiltered` — empty-string entries in a batch are dropped, not errors.
+- `TestHandleSearchQueryAndQueriesBothFails` — mutual-exclusion enforced at runtime.
+- `TestHandleSearchBothEmptyFails` — neither field set, or a batch of only empty strings, both error.
+
+**Consequence for existing callers**: None. A caller passing `query: "foo"` gets byte-identical output as before — `joinMarkdownBlocks` short-circuits the single-block case with no added bytes.
+
+---
+
 ## TBD — project-personal sync strategy
 
 **Status**: Open.
