@@ -536,7 +536,7 @@ Side benefit: the fallback path (LLM error, `Strict=false`) now returns the cach
 **What was deferred**:
 
 - **`/mm-review` integration**: the skill is a markdown prompt file (`~/.claude/skills/mm-review.md`), not a Go subcommand. Populating supersedes/contradicts from the skill is a follow-up in a separate session. The frontmatter + search behavior land here; the review-side prompting can iterate independently without breaking anything.
-- **PageRank-style importance boost** (separate open loop): depends on the relations schema existing. Now unblocked and ready for its own implementation pass when Jean is ready. Mastermind's boost is currently linear in link count; PageRank would propagate importance through the link graph. Phase 5+ work.
+- **PageRank-style importance boost** (separate open loop): depends on the relations schema existing. **Landed 2026-04-10 as a follow-on, see the next entry.**
 - **Validation of slug targets**: considered failing parse on a slug that doesn't resolve. Rejected — would create a chicken-and-egg problem where writing a new entry that supersedes an entry you're about to delete crashes parse. Dangling-slug tolerance is the cheaper and more forgiving default.
 
 **Test coverage**: 8 new tests across two files.
@@ -554,6 +554,39 @@ Side benefit: the fallback path (LLM error, `Strict=false`) now returns the cach
 - `TestSlugFromPath` — helper unit test covering path-with-dir, path-with-ext, plain name, extensionless name, empty input.
 
 **Consequence for callers**: `Result` gains a new exported `Annotation string` field. Existing callers that don't read the field are unaffected (zero value is empty string). MCP callers see the annotation rendered inline in the H3 heading of each result — `### [scope] slug · kind · date · (contradicts "topic")`.
+
+---
+
+## 2026-04-10 — PageRank-style incoming-link boost (follow-on to supersedes/contradicts)
+
+**Decision**: Added a second within-class score multiplier in `internal/search/search.go` that rewards entries based on **incoming** links from the rest of the (scope-gathered) corpus. Counts both `supersedes` and `contradicts` edges as incoming links — anything that explicitly points at an entry is evidence the entry was load-bearing enough to be referenced. Formula: `multiplier *= 1 + 0.1 * ln(1 + incoming_count)`, capped at +0.3 (max 1.3×). Single-pass count; no iterative eigenvector computation. Applied alongside the existing outgoing-supersedes boost — both signals coexist because they answer different questions.
+
+**Why two boosts, not one**:
+- **Outgoing supersedes** (existing): "this entry replaces N older decisions" → rewards the *latest synthesis*. The current state-of-the-art entry in a chain.
+- **Incoming supersedes/contradicts** (new): "N newer entries had to explicitly replace or argue with this entry" → rewards the *historical anchor*. The decision that mattered enough to be revisited multiple times.
+
+Both are legitimate "important entry" signals at different points in the lifecycle, and under hard rule #7 (knowledge is never silently deleted) the historical anchor is still searchable and worth surfacing.
+
+**Why contradicts IS counted in the incoming pass even though it's excluded from the outgoing pass**: incoming contradicts means "newer entries say I am wrong", which is exactly the load-bearing signal we want — the entry was important enough to argue with. The asymmetry (excluded from outgoing, included in incoming) is intentional, not an inconsistency: the outgoing pass needed to avoid the shiba-memory failure mode of treating `contradicts` and `supports` identically as positive evidence about the *citing* entry. The incoming pass is asking the opposite question — what does the link tell us about the *cited* entry — and the answer is "people kept revisiting it", which is positive regardless of edge polarity.
+
+**Why ln(1 + n) instead of n**: linear scaling lets a heavily-cited entry runaway-dominate. Log shape front-loads the reward (the first few citations matter a lot, additional ones matter less) and bounds growth naturally. The `+0.3` cap is a belt-and-suspenders safeguard at ~20 incoming links — at career-long corpus sizes one entry might plausibly accumulate that many citations, and we want the cap to engage before it bridges class boundaries.
+
+**Scope choice — `refs`, not `filtered` or whole-store**: Computed over the scope-gathered `refs` slice (post-scope, pre-kind/tag-filter), so kind/tag filters don't shift importance — narrowing by `kind: lesson` shouldn't change which decision is "load-bearing" in the user's universe. Computing against the entire store was rejected because cross-scope edges would inflate importance even when the user has explicitly excluded a scope. The chosen middle ground keeps importance stable as filters narrow but scope-aware as the user changes which slice of their knowledge matters.
+
+**Inspiration**: soulforge's `docs/repo-map.md` ranks files in the repo graph by PageRank importance because "which files matter most" is a stronger signal than "which files match the query best" for many tasks. Same logic applies to a long-lived knowledge corpus. Mastermind doesn't need iterative eigenvectors at this scale — a single-pass count is sufficient and stays within the no-persistent-index constraint (hard rule #3).
+
+**Class invariant preserved**: like every other within-class boost (supersedes, access frequency, project), the multiplier never bridges a class gap. A maximally-boosted body-only hit (class 5) will still lose to a topic-token hit (class 3) because `sortResultsByTier` checks class first and treats score as a within-class tiebreaker only. Locked in by `TestIncomingLinkBoostCannotBridgeClass`.
+
+**Test coverage**: 2 new tests in `internal/search/relations_test.go`:
+- `TestIncomingLinkBoostRanksReferencedHigher` — anchor entry with three pointing-at-it newer entries (2 supersedes + 1 contradicts) ranks above an otherwise identical competing entry. The pointing entries have unrelated topics so only the relations metadata moves the needle.
+- `TestIncomingLinkBoostCannotBridgeClass` — body-only hit with 30 incoming links (saturates the cap) still loses to a class-3 topic-token hit.
+
+Both passing. Total search-package test count climbs accordingly; full suite still green.
+
+**What was deliberately NOT done**:
+- **Iterative PageRank eigenvector**: rejected on the YAGNI principle. At hundreds-to-thousands of entries, single-pass counting is indistinguishable from full PageRank for ranking purposes and avoids the need for a persistent precomputed importance index (hard rule #3).
+- **Edge weighting** (e.g., `supersedes` worth more than `contradicts` or vice versa): rejected because there's no a-priori reason to weight them differently as incoming evidence. Both mean "someone bothered to write a frontmatter pointer at this entry". If dogfooding shows asymmetry is needed, revisit.
+- **Damping factor**: classical PageRank uses one to prevent rank sinks. Not applicable here because we're not iterating.
 
 ---
 

@@ -1,6 +1,7 @@
 package search
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -252,6 +253,205 @@ func TestContradictsCoRetrievalDoesNotDoubleCount(t *testing.T) {
 	if bCount != 1 {
 		t.Errorf("B appears %d times in results, want exactly 1 (dedup)", bCount)
 	}
+}
+
+// TestIncomingLinkBoostRanksReferencedHigher verifies the PageRank-
+// style incoming-link boost: an entry that other entries reference
+// (via supersedes or contradicts) ranks above an otherwise-identical
+// entry that nothing points at, even though the referenced entry
+// itself does not list any outgoing links.
+//
+// The signal is the inverse of the outgoing supersedes boost — it
+// rewards "this entry was load-bearing enough that newer entries
+// had to explicitly replace or contradict it", which is exactly the
+// historical-anchor case soulforge's PageRank captures for files.
+func TestIncomingLinkBoostRanksReferencedHigher(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := store.Config{UserPersonalRoot: filepath.Join(tmp, "user"), Now: time.Now}
+	s := store.New(cfg)
+
+	// "anchor" — the load-bearing entry. No outgoing links itself,
+	// but two other entries supersede it and one contradicts it.
+	anchor := &format.Entry{
+		Metadata: format.Metadata{
+			Date: "2026-04-01", Project: "mm",
+			Topic: "alpha original load bearing decision",
+			Kind:  format.KindDecision, Scope: format.ScopeUserPersonal,
+		},
+		Body: "body",
+	}
+	// "competing" — same class, same date, no incoming links.
+	competing := &format.Entry{
+		Metadata: format.Metadata{
+			Date: "2026-04-01", Project: "mm",
+			Topic: "alpha competing unrelated decision text",
+			Kind:  format.KindDecision, Scope: format.ScopeUserPersonal,
+		},
+		Body: "body",
+	}
+
+	// Write anchor + competing first so we can capture the anchor slug.
+	ap, err := s.Write(anchor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ap, err = s.Promote(ap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchorSlug := slugFromPath(ap)
+
+	if cp, err := s.Write(competing); err != nil {
+		t.Fatal(err)
+	} else if _, err := s.Promote(cp); err != nil {
+		t.Fatal(err)
+	}
+
+	// Three "newer" entries that point at the anchor. They are
+	// deliberately written under unrelated topics so they don't
+	// match the "alpha" query themselves — only their relations
+	// metadata should affect the anchor's score.
+	for i, slugList := range [][]string{
+		{anchorSlug}, // supersedes
+		{anchorSlug}, // supersedes
+	} {
+		ent := &format.Entry{
+			Metadata: format.Metadata{
+				Date: "2026-04-02", Project: "mm",
+				Topic: fmt.Sprintf("zeta replacement note %d", i),
+				Kind:  format.KindDecision, Scope: format.ScopeUserPersonal,
+				Supersedes: slugList,
+			},
+			Body: "body",
+		}
+		p, err := s.Write(ent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Promote(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	contra := &format.Entry{
+		Metadata: format.Metadata{
+			Date: "2026-04-03", Project: "mm",
+			Topic: "zeta contradicting newer take",
+			Kind:  format.KindDecision, Scope: format.ScopeUserPersonal,
+			Contradicts: []string{anchorSlug},
+		},
+		Body: "body",
+	}
+	if cp, err := s.Write(contra); err != nil {
+		t.Fatal(err)
+	} else if _, err := s.Promote(cp); err != nil {
+		t.Fatal(err)
+	}
+
+	searcher := NewKeywordSearcher(s)
+	results, err := searcher.Search(Query{QueryText: "alpha"})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) < 2 {
+		t.Fatalf("got %d results, want at least 2 (anchor + competing)", len(results))
+	}
+
+	// The anchor (3 incoming links) must rank above competing (0).
+	// Both are class 3 with identical raw topic-token scores; the
+	// only differentiator is the incoming-link boost.
+	if !strings.Contains(results[0].Metadata.Topic, "original load bearing") {
+		t.Errorf("results[0] = %q, want anchor (original load bearing); got order: %v",
+			results[0].Metadata.Topic, topicsOf(results))
+	}
+}
+
+// TestIncomingLinkBoostCannotBridgeClass locks in the load-bearing
+// invariant: even a maximally-boosted body-only hit (class 5) must
+// never outrank a topic-token hit (class 3). The boost is a within-
+// class tiebreaker, not a cross-class jump.
+func TestIncomingLinkBoostCannotBridgeClass(t *testing.T) {
+	tmp := t.TempDir()
+	cfg := store.Config{UserPersonalRoot: filepath.Join(tmp, "user"), Now: time.Now}
+	s := store.New(cfg)
+
+	// Anchor: matches "kappa" only in body, but heavily referenced.
+	anchor := &format.Entry{
+		Metadata: format.Metadata{
+			Date: "2026-04-01", Project: "mm",
+			Topic: "totally unrelated heading",
+			Kind:  format.KindLesson, Scope: format.ScopeUserPersonal,
+		},
+		Body: "kappa appears here in the body only",
+	}
+	ap, err := s.Write(anchor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ap, err = s.Promote(ap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchorSlug := slugFromPath(ap)
+
+	// Many newer entries reference the anchor — saturate the boost cap.
+	for i := 0; i < 30; i++ {
+		ent := &format.Entry{
+			Metadata: format.Metadata{
+				Date: "2026-04-02", Project: "mm",
+				Topic: fmt.Sprintf("filler topic %d", i),
+				Kind:  format.KindLesson, Scope: format.ScopeUserPersonal,
+				Supersedes: []string{anchorSlug},
+			},
+			Body: "body",
+		}
+		p, err := s.Write(ent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Promote(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Topic-hit entry: class 3 with no boost.
+	topic := &format.Entry{
+		Metadata: format.Metadata{
+			Date: "2026-04-01", Project: "mm",
+			Topic: "kappa heading direct",
+			Kind:  format.KindLesson, Scope: format.ScopeUserPersonal,
+		},
+		Body: "body",
+	}
+	if tp, err := s.Write(topic); err != nil {
+		t.Fatal(err)
+	} else if _, err := s.Promote(tp); err != nil {
+		t.Fatal(err)
+	}
+
+	searcher := NewKeywordSearcher(s)
+	results, err := searcher.Search(Query{QueryText: "kappa"})
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(results) < 2 {
+		t.Fatalf("got %d results, want at least 2", len(results))
+	}
+	// The class-3 topic hit must come first regardless of how many
+	// incoming links the body-hit anchor has accumulated.
+	if !strings.Contains(results[0].Metadata.Topic, "kappa heading direct") {
+		t.Errorf("results[0] = %q, want class-3 topic hit; class %d should never lose to a boosted body hit",
+			results[0].Metadata.Topic, results[0].class)
+	}
+}
+
+// topicsOf returns the topic strings of a result slice in order.
+// Test helper for readable failure messages.
+func topicsOf(rs []Result) []string {
+	out := make([]string, 0, len(rs))
+	for _, r := range rs {
+		out = append(out, r.Metadata.Topic)
+	}
+	return out
 }
 
 // TestSlugFromPath covers the slug helper directly.

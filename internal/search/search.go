@@ -523,7 +523,7 @@ func (k *KeywordSearcher) Search(q Query) ([]Result, error) {
 		sortResultsByTier(results)
 	}
 
-	// ── Supersedes boost ──
+	// ── Outgoing supersedes boost ──
 	//
 	// Within-class score multiplier for entries that explicitly
 	// supersede other entries. The count is capped at 3 to prevent
@@ -533,10 +533,10 @@ func (k *KeywordSearcher) Search(q Query) ([]Result, error) {
 	// because it only scales Score, and the comparator checks class
 	// first.
 	//
-	// Note: contradicts is deliberately NOT included in the boost
-	// count. Contradicts triggers co-retrieval below instead, which
-	// is a stronger signal: the contradicting entry is pulled into
-	// the result list regardless of its own keyword score. See
+	// Note: contradicts is deliberately NOT included in the OUTGOING
+	// boost count. Contradicts triggers co-retrieval below instead,
+	// which is a stronger signal: the contradicting entry is pulled
+	// into the result list regardless of its own keyword score. See
 	// DECISIONS.md 2026-04-10 supersedes/contradicts entry for the
 	// rationale (shiba-memory treats contradicts as a score booster;
 	// mastermind treats it as a co-retrieval signal because
@@ -550,6 +550,69 @@ func (k *KeywordSearcher) Search(q Query) ([]Result, error) {
 		if linked > 0 {
 			results[i].Score *= 1.0 + float64(linked)*0.2
 		}
+	}
+
+	// ── Incoming-link boost (PageRank-style) ──
+	//
+	// Score multiplier for entries that OTHER entries reference via
+	// supersedes or contradicts. This is the inverse of the outgoing
+	// supersedes boost above: that one rewards "this entry replaces
+	// many older ones" (latest synthesis); this one rewards "this
+	// entry was load-bearing enough that newer entries had to
+	// explicitly replace or contradict it" (historical anchor). Both
+	// signals are legitimate and coexist.
+	//
+	// Conceptually this is PageRank over the knowledge graph. At
+	// mastermind scale (hundreds to low thousands of entries) a
+	// single-pass incoming-link count is sufficient — no iterative
+	// eigenvector computation needed. Inspiration: soulforge ranks
+	// repo files by graph importance for the same reason ("which
+	// files matter most" beats "which files match the query most"
+	// for many tasks). See DECISIONS.md 2026-04-10 entry on the
+	// PageRank close.
+	//
+	// Why contradicts IS counted here even though the outgoing pass
+	// excludes it: incoming contradicts means "newer entries say
+	// this one is wrong", which is exactly the load-bearing signal
+	// we want — the entry was important enough to be argued with.
+	// Under hard rule #7 superseded/contradicted entries stay
+	// searchable, and surfacing them is the whole point of the
+	// "invalidate, don't delete" model.
+	//
+	// Computed over the scope-gathered `refs` slice, NOT `filtered`,
+	// so kind/tag filters don't shift importance. Importance is a
+	// property of the entry within the scope universe, not of the
+	// current narrowing.
+	//
+	// Weight: 0.1 * ln(1 + incoming), capped at +0.3. The cap keeps
+	// the multiplier max ≈1.3 — comparable to access boost and the
+	// project boost, well below any class gap. Class still strictly
+	// dominates because the comparator checks class first.
+	incoming := make(map[string]int, len(refs))
+	for _, ref := range refs {
+		for _, slug := range ref.Metadata.Supersedes {
+			slug = strings.TrimSpace(slug)
+			if slug != "" {
+				incoming[slug]++
+			}
+		}
+		for _, slug := range ref.Metadata.Contradicts {
+			slug = strings.TrimSpace(slug)
+			if slug != "" {
+				incoming[slug]++
+			}
+		}
+	}
+	for i := range results {
+		n := incoming[slugFromPath(results[i].Ref.Path)]
+		if n == 0 {
+			continue
+		}
+		boost := math.Log(1+float64(n)) * 0.1
+		if boost > 0.3 {
+			boost = 0.3
+		}
+		results[i].Score *= 1.0 + boost
 	}
 	sortResultsByTier(results)
 
