@@ -13,7 +13,7 @@ kind: open-loop
 scope: project-shared
 category: memory-stack
 confidence: high
-accessed: 2
+accessed: 3
 last_accessed: "2026-04-11"
 ---
 
@@ -69,3 +69,7 @@ Loop stays open for the L0/L1 runtime enforcement half.
 
 ## Source
 `docs/reference-notes/mempalace.md` §3. MemPalace's own memory stack lives in their README's "The Memory Stack" section. Conversation 2026-04-10.
+
+## Resolution
+
+L0/L1 enforcement half landed 2026-04-10. formatSessionStart in cmd/mastermind/main.go now measures each block with a 4-chars-per-token heuristic (estimateTokens helper) and emits a single-line warning via warnBudgetOverage to an injected io.Writer (os.Stderr in production) when a block exceeds its soft budget (L0=500, L1=2000). Warn-and-ship, not warn-and-clip — block is never truncated. Shipped preemptively despite under-budget corpus because the measurement path is dormant under budget and wiring cost is low. 6 new tests in session_start_budget_test.go cover the estimator, silent happy path, L0 + L1 overage, no-truncation invariant, and nil warnOut. Docs updated in MEMORY-STACK.md layer table and status section; full rationale in DECISIONS.md 2026-04-10 entry.
