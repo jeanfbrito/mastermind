@@ -14,8 +14,8 @@ kind: open-loop
 scope: project-shared
 category: hooks
 confidence: high
-accessed: 1
-last_accessed: "2026-04-10"
+accessed: 2
+last_accessed: "2026-04-11"
 ---
 
 ## What's open

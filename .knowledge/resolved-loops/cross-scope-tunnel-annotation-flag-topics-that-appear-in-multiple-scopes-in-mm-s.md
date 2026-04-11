@@ -13,6 +13,8 @@ kind: open-loop
 scope: project-shared
 category: search/output
 confidence: high
+accessed: 1
+last_accessed: "2026-04-11"
 ---
 
 ## What's open
@@ -44,3 +46,7 @@ No traversal tool, no separate MCP call, no graph structure. The "tunnel" concep
 ## Source
 
 `~/Github/mempalace/palace_graph.py:161` `find_tunnels`; mining report 2026-04-10 (Agent a06eeb60 knowledge-graph relations).
+
+## Resolution
+
+Landed in internal/search/format.go. FormatResultsMarkdown builds a normalized topic→scopes map once per call; writeResultSection emits "[cross-scope: also in X, Y]" (sorted, deduped, excluding own scope) as a header suffix. Orthogonal to the contradicts paren annotation — both can appear together. Case-insensitive topic match, pending variants collapse into base scope. 4 new tests in search_test.go cover the three-scope, single-scope, case-insensitive, and contradicts-combination cases.
