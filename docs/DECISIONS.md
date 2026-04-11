@@ -590,6 +590,40 @@ Both passing. Total search-package test count climbs accordingly; full suite sti
 
 ---
 
+## 2026-04-10 — L0/L1 SessionStart budget enforcement: warn, don't truncate
+
+**Decision**: Added soft token-budget measurement for the L0 (open-loops) and L1 (project knowledge) blocks of the session-start subcommand in `cmd/mastermind/main.go`. When a block exceeds its documented budget (L0 = 500 tokens, L1 = 2000 tokens per `docs/MEMORY-STACK.md`), `formatSessionStart` writes a single-line warning to an injected `io.Writer` (os.Stderr in production, a buffer in tests). The block is **never truncated** — the full content still ships.
+
+**Why warn-and-ship rather than warn-and-clip**: an earlier draft of `docs/MEMORY-STACK.md` proposed "count bytes, warn to stderr, and clip". The clip half was rejected during implementation because silent truncation hides the exact bloat the measurement is meant to surface. The user needs to see the whole block to decide what to demote from the always-loaded tier (L0/L1) to the on-demand tier (L2/L3); hiding half of it defeats the decision support. The open-loop spec for this work said the same thing explicitly: "Do NOT truncate silently — surface the problem so the user can decide what to demote to L2". Between the older draft and the open-loop spec, the spec wins.
+
+**Why ship the measurement now rather than waiting for symptoms**: the open-loop spec also said "revisit when the corpus passes ~100 entries or when a session-start dump visibly pushes past the soft budgets" — today the corpus is ~35 entries and the budget is comfortably under-spent. The measurement was still shipped preemptively because:
+
+1. The code path is dormant under budget — zero behavior change, zero risk to ranking or output.
+2. The goal is an *alarm that fires when bloat appears*, which only works if the alarm is already wired.
+3. The cost of wiring it now (one small helper + one format refactor + a test file) is strictly less than the cost of remembering to add it later the moment symptoms appear.
+
+The bias is opposite to the ACT-R "proper mode" open-loop, which is gated on dogfooding because its wrong heuristic could actively degrade ranking. Passive measurement has no such downside.
+
+**Why stderr rather than a dedicated log file**: stderr is Claude Code's hook-log channel — the hook subprocess's stderr is captured by Claude Code into the same log it uses for every other hook. That is already the silent-unless-needed surface for hook subprocesses (the user doesn't see it in their normal workflow but it's inspectable when they go looking). A dedicated `~/.knowledge/logs/mastermind.log` would be more work (path resolution, directory creation, silent-failure semantics for filesystem errors) for the same outcome. The `PruneStale` silent-discard limitation noted in CLAUDE.md is a separate and bigger issue — when that gets its own log file in Phase 6, the budget warnings can join it.
+
+**Why 4-chars-per-token**: the same heuristic `BodyExcerpt()` uses for its L2 budget (the 800-char threshold documented in `internal/search/excerpt.go`). Keeping the two tiers commensurate means a reader comparing L0+L1 totals against an L2 response size is comparing the same units. Claude/GPT tokenizers average ~4 chars/token for English prose; markdown leans slightly higher, so the estimate is mildly conservative — warnings fire slightly before the real tokenizer would agree, which is the right bias for a soft ceiling.
+
+**Test coverage**: 6 new tests in `cmd/mastermind/session_start_budget_test.go`:
+- `TestEstimateTokensRoughBytes` — pins the ceil(len/4) formula against representative inputs.
+- `TestFormatSessionStartUnderBudgetNoWarning` — silent-unless-needed for the 99% path.
+- `TestFormatSessionStartL0OverBudgetWarns` — 40 padded open-loops exceed 500 tokens, warning asserts label, phrase, budget number, and single-line shape.
+- `TestFormatSessionStartL1OverBudgetWarns` — 120 padded project entries exceed 2000 tokens.
+- `TestFormatSessionStartDoesNotTruncateOverBudget` — sentinel markers on every entry must still appear in the output alongside the warning. This is the load-bearing invariant test.
+- `TestFormatSessionStartNilWarnerIsSafe` — the contract accepts a nil `warnOut` to silence the check, and doesn't panic.
+
+`formatSessionStart` signature now takes `warnOut io.Writer` as its final parameter. Production caller (`runSessionStart`) passes `os.Stderr`; the only other caller is the new test file.
+
+**What was deferred**:
+- Applying the same budget check to `formatPostCompact` — post-compact is a narrower re-injection surface and has its own budget story. The open-loop spec specifically scoped L0/L1 enforcement to session-start.
+- A shared logger package for `PruneStale`, budget warnings, and future silent-unless-needed writers. Current footprint doesn't justify a new internal package (CLAUDE.md: don't create abstractions for one-time operations). When Phase 6 adds the `~/.knowledge/logs/mastermind.log` file for `PruneStale`, the budget warnings should be redirected there at the same time.
+
+---
+
 ## TBD — project-personal sync strategy
 
 **Status**: Open.

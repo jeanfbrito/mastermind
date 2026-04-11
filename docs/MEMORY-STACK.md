@@ -19,8 +19,8 @@ coincidence.
 
 | Layer | What lives there | Soft budget | When loaded | Enforcement |
 |-------|-----------------|-------------|-------------|-------------|
-| L0 | Open-loop topics (session-start injection) | 500 tokens | Every session, automatically | None yet — documentation only |
-| L1 | Project knowledge (session-start injection) | 2 000 tokens | Every session, automatically | None yet — documentation only |
+| L0 | Open-loop topics (session-start injection) | 500 tokens | Every session, automatically | Soft — `formatSessionStart` in `cmd/mastermind/main.go` warns to stderr when exceeded; never truncates |
+| L1 | Project knowledge (session-start injection) | 2 000 tokens | Every session, automatically | Soft — same measurement pass; warns to stderr, does not truncate |
 | L2 | `mm_search` default response (trimmed excerpt) | ~200 tokens/result | On-demand, when agent calls mm_search | Enforced by `BodyExcerpt()` in `internal/search/excerpt.go` |
 | L3 | Full entry body (expand:true or direct Read) | Unbounded | Explicit agent action | N/A — caller pays |
 
@@ -38,9 +38,13 @@ exists to force prioritization: old loops that are no longer active
 should be closed with `mm_close_loop`, not allowed to accumulate
 indefinitely.
 
-**If the budget is exceeded today**: nothing happens — enforcement is
-follow-on work. The session-start output will be longer than intended.
-Mitigation: close stale loops regularly.
+**If the budget is exceeded**: `formatSessionStart` writes a
+one-line warning to stderr (captured by Claude Code's hook log, not
+the user's UI — this is the silent-unless-needed channel for hook
+subprocesses). The block is NOT truncated — the full content still
+ships so the user sees the whole picture and can make an informed
+pruning decision. Mitigation: close stale loops regularly with
+`mm_close_loop`.
 
 ### L1 — Project knowledge (~2 000 tokens)
 
@@ -50,8 +54,8 @@ a first-section excerpt each. This is the "ambient awareness" layer:
 the agent knows what the project has already figured out without having
 to search.
 
-**If the budget is exceeded today**: nothing happens. The session-start
-output grows. Mitigation: keep project-shared entries to the most
+**If the budget is exceeded**: same behavior as L0 — warn to stderr,
+never truncate. Mitigation: keep project-shared entries to the most
 load-bearing lessons; use user-personal scope for broad engineering
 knowledge that doesn't need to be in every session.
 
@@ -105,17 +109,29 @@ Three systems, same pattern. The tiering is the right abstraction.
 
 ---
 
-## Non-goals for this task
+## Status
 
-This document establishes the model and documents the soft budgets.
-It does NOT implement runtime enforcement of L0 or L1 budgets. That
-is follow-on work:
+All four tiers now have matching enforcement:
 
-- **L0/L1 enforcement**: the session-start subcommand should truncate
-  or summarize when the injected content exceeds the soft budget.
-  Likely implementation: count bytes, warn to stderr (silent-unless-
-  needed: stderr is the agent's stderr, not the user's UI), and clip.
-- **L2 per-result budget**: already enforced by `BodyExcerpt()`. The
+- **L0 / L1**: measurement + stderr warning landed 2026-04-10 in
+  `cmd/mastermind/main.go` (`formatSessionStart` + `estimateTokens`
+  + `warnBudgetOverage`). The check is deliberately SOFT — the
+  block is NEVER truncated. An earlier draft of this document
+  proposed "count bytes, warn, and clip"; the clip half was
+  rejected during implementation because silent truncation would
+  hide the exact bloat the measurement is meant to surface. Warn
+  and ship is the whole point. See DECISIONS.md 2026-04-10 entry
+  on the L0/L1 enforcement shape.
+- **L2 per-result budget**: enforced by `BodyExcerpt()`. The
   ~200-token budget is approximate (800-char threshold ÷ 4 chars/token).
   Tune the `shortBodyThreshold` constant in `internal/search/excerpt.go`
   if real-session data shows it's wrong.
+- **L3**: no enforcement by design — the caller explicitly opts in
+  and pays the cost.
+
+The 4 chars-per-token heuristic is shared across L0, L1, and L2 so
+the budgets are commensurate. Claude/GPT tokenizers average ~4
+chars/token for English prose and slightly more for markdown, so
+the estimate is mildly conservative — warnings fire slightly before
+the real tokenizer would agree, which is the right bias for a soft
+ceiling.

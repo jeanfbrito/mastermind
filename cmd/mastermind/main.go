@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -337,7 +338,7 @@ func runSessionStart() error {
 		})
 	}
 
-	output := formatSessionStart(openLoops, projectEntries, pendingCount)
+	output := formatSessionStart(openLoops, projectEntries, pendingCount, os.Stderr)
 	if output != "" {
 		fmt.Print(output)
 	}
@@ -507,9 +508,66 @@ func countPending(s *store.Store) (int, error) {
 	return count, nil
 }
 
+// Soft token budgets for the L0 (open-loops) and L1 (project
+// knowledge) SessionStart blocks, matching docs/MEMORY-STACK.md.
+// These are SOFT — formatSessionStart warns when a block exceeds
+// its budget but never truncates. Truncation would silently hide
+// bloat, which violates the point of the measurement: surface the
+// problem so the user can decide what to demote from always-loaded
+// to on-demand tiers.
+//
+// Enforcement shipped 2026-04-10 as the L0/L1 half of the L0-L3
+// memory-stack open-loop (see DECISIONS.md).
+const (
+	budgetL0Tokens = 500  // open-loops header
+	budgetL1Tokens = 2000 // project knowledge
+)
+
+// estimateTokens returns a rough token count for s using the
+// 4-chars-per-token heuristic that mastermind's L2 BodyExcerpt
+// target and the docs/MEMORY-STACK.md budgets are calibrated
+// against. This is deliberately a byte-length approximation, not
+// a tokenizer-accurate count — the goal is soft budget checking,
+// not billing.
+//
+// Claude and GPT tokenizers average ~4 characters per English
+// token. For structured markdown like SessionStart output (lots
+// of whitespace, short topic lines) the ratio tends to be a
+// little higher, which means our estimate is mildly conservative
+// — we raise the alarm slightly before the real tokenizer would.
+// That's the right bias for a soft ceiling.
+func estimateTokens(s string) int {
+	if s == "" {
+		return 0
+	}
+	return (len(s) + 3) / 4
+}
+
+// warnBudgetOverage writes a single-line warning to w when an
+// emitted SessionStart block has exceeded its soft token budget.
+// Does NOT truncate — the goal is to surface bloat to the user,
+// not hide it. When called via runSessionStart, w is os.Stderr,
+// which Claude Code captures into its hook log channel; that is
+// the silent-unless-needed surface for hook subprocesses (the
+// user does not see stderr in their normal workflow but the
+// output is inspectable when they go looking). Tests pass a
+// buffer so they can assert the warning shape.
+func warnBudgetOverage(w io.Writer, label string, tokens, budget int) {
+	if w == nil || tokens <= budget {
+		return
+	}
+	fmt.Fprintf(w, "mastermind: %s block exceeds soft budget (%d > %d tokens) — consider demoting entries to L2\n",
+		label, tokens, budget)
+}
+
 // formatSessionStart renders the session-start output as compact markdown.
 // Returns empty string when there's nothing to surface.
-func formatSessionStart(openLoops, projectEntries []store.EntryRef, pendingCount int) string {
+//
+// warnOut receives single-line warnings when an emitted block exceeds
+// its soft token budget (see budgetL0Tokens / budgetL1Tokens).
+// Production callers pass os.Stderr; tests pass a buffer to assert
+// the warning shape. A nil warnOut silences the check entirely.
+func formatSessionStart(openLoops, projectEntries []store.EntryRef, pendingCount int, warnOut io.Writer) string {
 	if len(openLoops) == 0 && len(projectEntries) == 0 && pendingCount == 0 {
 		return ""
 	}
@@ -517,20 +575,30 @@ func formatSessionStart(openLoops, projectEntries []store.EntryRef, pendingCount
 	var b strings.Builder
 	b.WriteString("## mastermind\n\n")
 
+	// Build L0 (open-loops header) into its own buffer so the block
+	// can be measured before being appended to the main output.
 	if len(openLoops) > 0 {
-		fmt.Fprintf(&b, "**Open loops** (%d):\n", len(openLoops))
+		var l0 strings.Builder
+		fmt.Fprintf(&l0, "**Open loops** (%d):\n", len(openLoops))
 		for _, ref := range openLoops {
-			fmt.Fprintf(&b, "- %s (%s)\n", ref.Metadata.Topic, ref.Metadata.Date)
+			fmt.Fprintf(&l0, "- %s (%s)\n", ref.Metadata.Topic, ref.Metadata.Date)
 		}
-		b.WriteByte('\n')
+		l0.WriteByte('\n')
+		warnBudgetOverage(warnOut, "L0 open-loops", estimateTokens(l0.String()), budgetL0Tokens)
+		b.WriteString(l0.String())
 	}
 
+	// Build L1 (project knowledge) into its own buffer for the
+	// same reason.
 	if len(projectEntries) > 0 {
-		fmt.Fprintf(&b, "**Project knowledge** (%d entries):\n", len(projectEntries))
+		var l1 strings.Builder
+		fmt.Fprintf(&l1, "**Project knowledge** (%d entries):\n", len(projectEntries))
 		for _, ref := range projectEntries {
-			fmt.Fprintf(&b, "- %s · %s\n", ref.Metadata.Topic, ref.Metadata.Kind)
+			fmt.Fprintf(&l1, "- %s · %s\n", ref.Metadata.Topic, ref.Metadata.Kind)
 		}
-		b.WriteByte('\n')
+		l1.WriteByte('\n')
+		warnBudgetOverage(warnOut, "L1 project knowledge", estimateTokens(l1.String()), budgetL1Tokens)
+		b.WriteString(l1.String())
 	}
 
 	if pendingCount > 0 {
