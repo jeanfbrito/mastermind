@@ -13,8 +13,8 @@ kind: open-loop
 scope: project-shared
 category: search/ranking
 confidence: high
-accessed: 3
-last_accessed: "2026-04-10"
+accessed: 4
+last_accessed: "2026-04-11"
 ---
 
 ## What

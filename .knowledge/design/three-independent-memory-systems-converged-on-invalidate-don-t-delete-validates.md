@@ -14,6 +14,8 @@ kind: insight
 scope: project-shared
 category: design
 confidence: high
+accessed: 1
+last_accessed: "2026-04-11"
 ---
 
 ## The convergence

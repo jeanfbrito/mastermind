@@ -14,6 +14,8 @@ kind: open-loop
 scope: project-shared
 category: search
 confidence: high
+accessed: 1
+last_accessed: "2026-04-11"
 ---
 
 ## What's open
@@ -34,3 +36,7 @@ Depends on the relations schema in the `schema/` open-loop. No-op until that shi
 
 ## Source
 Second-pass survey of soulforge. PageRank repo ranking from soulforge `docs/repo-map.md`; conversation 2026-04-10.
+
+## Resolution
+
+Landed in internal/search/search.go: incoming-link boost (supersedes + contradicts), 1 + 0.1*ln(1+n), capped at +0.3, computed over scope-gathered refs. Coexists with the existing outgoing supersedes boost. 2 new tests in relations_test.go locking class invariant. DECISIONS.md entry 2026-04-10 has full rationale.
