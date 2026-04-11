@@ -3,6 +3,7 @@ package search
 import (
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -57,10 +58,75 @@ func FormatResultsMarkdown(query string, results []Result, expand bool) string {
 		return b.String()
 	}
 
+	// Build a topic → set of scopes map for the cross-scope "tunnel"
+	// annotation. A topic that appears in more than one scope among
+	// the returned results is a "tunnel" in mempalace's sense —
+	// conceptual bridge that cuts across domains, worth flagging so
+	// the reader recognizes "this lesson applies everywhere, not just
+	// one project". Pending variants collapse into their base scope
+	// (user-personal:pending ≡ user-personal) so an unreviewed
+	// candidate in the same scope doesn't count as cross-scope.
+	//
+	// Topic keys are normalized (lowercased, trimmed) so trivial
+	// formatting variance ("Go modules" vs "go modules") doesn't
+	// prevent the match.
+	topicScopes := make(map[string]map[string]bool, len(results))
 	for _, r := range results {
-		writeResultSection(&b, r, query, expand)
+		key := normalizeTopicKey(r.Metadata.Topic)
+		if key == "" {
+			continue
+		}
+		if topicScopes[key] == nil {
+			topicScopes[key] = make(map[string]bool)
+		}
+		topicScopes[key][string(r.Ref.Scope)] = true
+	}
+
+	for _, r := range results {
+		writeResultSection(&b, r, query, expand, topicScopes)
 	}
 	return b.String()
+}
+
+// normalizeTopicKey lowercases and trims a topic string for
+// cross-scope equality matching. Empty after trimming → empty key,
+// which the caller treats as "skip" (no annotation).
+func normalizeTopicKey(topic string) string {
+	return strings.ToLower(strings.TrimSpace(topic))
+}
+
+// crossScopeAnnotation returns the " [cross-scope: also in X, Y]"
+// suffix for a result whose topic appears in more than one scope
+// among the returned set, or empty string if the topic is
+// scope-unique. The listed scopes exclude the result's own scope
+// and are sorted for deterministic output.
+//
+// Inspired by mempalace's palace_graph.find_tunnels() (palace_graph.py:161),
+// which identifies topics that span multiple wings as "tunnels" —
+// conceptual bridges between domains. Mastermind needs none of the
+// graph-traversal machinery because the flat markdown store makes
+// topic-name matching a single-pass map lookup.
+func crossScopeAnnotation(r Result, topicScopes map[string]map[string]bool) string {
+	key := normalizeTopicKey(r.Metadata.Topic)
+	if key == "" {
+		return ""
+	}
+	scopes := topicScopes[key]
+	if len(scopes) < 2 {
+		return ""
+	}
+	current := string(r.Ref.Scope)
+	others := make([]string, 0, len(scopes)-1)
+	for s := range scopes {
+		if s != current {
+			others = append(others, s)
+		}
+	}
+	if len(others) == 0 {
+		return ""
+	}
+	sort.Strings(others)
+	return fmt.Sprintf(" [cross-scope: also in %s]", strings.Join(others, ", "))
 }
 
 // writeResultSection renders a single result block. Each block starts
@@ -70,7 +136,11 @@ func FormatResultsMarkdown(query string, results []Result, expand bool) string {
 // Body verbosity is controlled by expand:
 //   - false → BodyExcerpt (L2: topic+section+match window, ≤~200 tokens)
 //   - true  → full body verbatim (L3: unbounded)
-func writeResultSection(b *strings.Builder, r Result, query string, expand bool) {
+//
+// topicScopes is the shared topic→scopes map used to emit the
+// cross-scope "tunnel" annotation on entries whose topic appears in
+// more than one scope.
+func writeResultSection(b *strings.Builder, r Result, query string, expand bool, topicScopes map[string]map[string]bool) {
 	slug := filepath.Base(r.Ref.Path)
 	slug = strings.TrimSuffix(slug, ".md")
 
@@ -79,14 +149,19 @@ func writeResultSection(b *strings.Builder, r Result, query string, expand bool)
 		scopeLabel += ":pending"
 	}
 
+	// Cross-scope "tunnel" suffix — orthogonal to the contradicts
+	// Annotation, so a co-retrieved contradicts target that also
+	// appears in a second scope surfaces both markers.
+	crossScope := crossScopeAnnotation(r, topicScopes)
+
 	if r.Annotation != "" {
 		// Co-retrieved entries (e.g. contradicts targets) carry an
 		// inline tag on the heading so the reader can immediately
 		// see why the entry surfaced — it's a relationship hit,
 		// not a keyword match.
-		fmt.Fprintf(b, "### [%s] %s · %s · %s · (%s)\n", scopeLabel, slug, r.Metadata.Kind, r.Metadata.Date, r.Annotation)
+		fmt.Fprintf(b, "### [%s] %s · %s · %s · (%s)%s\n", scopeLabel, slug, r.Metadata.Kind, r.Metadata.Date, r.Annotation, crossScope)
 	} else {
-		fmt.Fprintf(b, "### [%s] %s · %s · %s\n", scopeLabel, slug, r.Metadata.Kind, r.Metadata.Date)
+		fmt.Fprintf(b, "### [%s] %s · %s · %s%s\n", scopeLabel, slug, r.Metadata.Kind, r.Metadata.Date, crossScope)
 	}
 	fmt.Fprintf(b, "**topic**: %s\n", r.Metadata.Topic)
 	if len(r.Metadata.Tags) > 0 {

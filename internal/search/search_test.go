@@ -1426,6 +1426,135 @@ func TestFormatResultsMarkdownHasPerResultHeadings(t *testing.T) {
 	}
 }
 
+// TestFormatResultsMarkdownCrossScopeAnnotation verifies the tunnel
+// annotation: when the same topic shows up in two or more scopes, each
+// hit gets a "[cross-scope: also in X, Y]" suffix listing the other
+// scopes. The annotation lists scopes deterministically (sorted) and
+// excludes the entry's own scope.
+func TestFormatResultsMarkdownCrossScopeAnnotation(t *testing.T) {
+	topic := "Go modules tidy quirks"
+	results := []Result{
+		{
+			Ref: store.EntryRef{
+				Path:  "/tmp/user/go-modules.md",
+				Scope: format.ScopeUserPersonal,
+			},
+			Metadata: format.Metadata{
+				Date: "2026-04-05", Topic: topic, Kind: format.KindLesson,
+			},
+		},
+		{
+			Ref: store.EntryRef{
+				Path:  "/tmp/shared/go-modules.md",
+				Scope: format.ScopeProjectShared,
+			},
+			Metadata: format.Metadata{
+				Date: "2026-04-04", Topic: topic, Kind: format.KindLesson,
+			},
+		},
+		{
+			Ref: store.EntryRef{
+				Path:  "/tmp/personal/go-modules.md",
+				Scope: format.ScopeProjectPersonal,
+			},
+			Metadata: format.Metadata{
+				Date: "2026-04-03", Topic: topic, Kind: format.KindLesson,
+			},
+		},
+	}
+
+	out := FormatResultsMarkdown("go modules", results, false)
+
+	// The user-personal hit should list the other two scopes, sorted.
+	wantUser := "[user-personal] go-modules · lesson · 2026-04-05 [cross-scope: also in project-personal, project-shared]"
+	if !strings.Contains(out, wantUser) {
+		t.Errorf("user-personal heading missing expected cross-scope suffix.\nwant substring: %q\ngot: %s", wantUser, out)
+	}
+	// The project-shared hit should list user-personal + project-personal.
+	wantShared := "[project-shared] go-modules · lesson · 2026-04-04 [cross-scope: also in project-personal, user-personal]"
+	if !strings.Contains(out, wantShared) {
+		t.Errorf("project-shared heading missing expected cross-scope suffix.\nwant substring: %q\ngot: %s", wantShared, out)
+	}
+	// The project-personal hit should list user-personal + project-shared.
+	wantPersonal := "[project-personal] go-modules · lesson · 2026-04-03 [cross-scope: also in project-shared, user-personal]"
+	if !strings.Contains(out, wantPersonal) {
+		t.Errorf("project-personal heading missing expected cross-scope suffix.\nwant substring: %q\ngot: %s", wantPersonal, out)
+	}
+}
+
+// TestFormatResultsMarkdownCrossScopeSingleScopeNoAnnotation confirms
+// that results confined to a single scope get no annotation. The tunnel
+// signal exists only when a topic genuinely spans scopes.
+func TestFormatResultsMarkdownCrossScopeSingleScopeNoAnnotation(t *testing.T) {
+	results := []Result{
+		{
+			Ref:      store.EntryRef{Path: "/tmp/user/a.md", Scope: format.ScopeUserPersonal},
+			Metadata: format.Metadata{Date: "2026-04-05", Topic: "Alpha only here", Kind: format.KindLesson},
+		},
+		{
+			Ref:      store.EntryRef{Path: "/tmp/user/b.md", Scope: format.ScopeUserPersonal},
+			Metadata: format.Metadata{Date: "2026-04-04", Topic: "Beta only here", Kind: format.KindInsight},
+		},
+	}
+	out := FormatResultsMarkdown("alpha", results, false)
+	if strings.Contains(out, "cross-scope") {
+		t.Errorf("single-scope results should not emit cross-scope annotation; got:\n%s", out)
+	}
+}
+
+// TestFormatResultsMarkdownCrossScopeCaseInsensitive confirms the topic
+// equality check is normalized: "Electron IPC" in one scope and
+// "electron ipc" in another count as the same topic and both get the
+// annotation.
+func TestFormatResultsMarkdownCrossScopeCaseInsensitive(t *testing.T) {
+	results := []Result{
+		{
+			Ref:      store.EntryRef{Path: "/tmp/user/a.md", Scope: format.ScopeUserPersonal},
+			Metadata: format.Metadata{Date: "2026-04-05", Topic: "Electron IPC handshake", Kind: format.KindLesson},
+		},
+		{
+			Ref:      store.EntryRef{Path: "/tmp/shared/b.md", Scope: format.ScopeProjectShared},
+			Metadata: format.Metadata{Date: "2026-04-04", Topic: "electron ipc handshake", Kind: format.KindLesson},
+		},
+	}
+	out := FormatResultsMarkdown("electron", results, false)
+	if !strings.Contains(out, "[cross-scope: also in project-shared]") {
+		t.Errorf("case-insensitive topic match failed: %s", out)
+	}
+	if !strings.Contains(out, "[cross-scope: also in user-personal]") {
+		t.Errorf("case-insensitive topic match failed for second entry: %s", out)
+	}
+}
+
+// TestFormatResultsMarkdownCrossScopeWithContradictsAnnotation verifies
+// the two annotations are orthogonal: a co-retrieved contradicts target
+// that also happens to appear in multiple scopes gets BOTH the paren
+// annotation and the bracketed cross-scope suffix.
+func TestFormatResultsMarkdownCrossScopeWithContradictsAnnotation(t *testing.T) {
+	results := []Result{
+		{
+			Ref:      store.EntryRef{Path: "/tmp/user/new-claim.md", Scope: format.ScopeUserPersonal},
+			Metadata: format.Metadata{Date: "2026-04-05", Topic: "new benchmark", Kind: format.KindInsight},
+		},
+		{
+			Ref:        store.EntryRef{Path: "/tmp/shared/old-claim.md", Scope: format.ScopeProjectShared},
+			Metadata:   format.Metadata{Date: "2026-03-01", Topic: "old benchmark", Kind: format.KindInsight},
+			Annotation: `contradicts "new benchmark"`,
+		},
+		{
+			Ref:      store.EntryRef{Path: "/tmp/user/old-claim.md", Scope: format.ScopeUserPersonal},
+			Metadata: format.Metadata{Date: "2026-02-01", Topic: "old benchmark", Kind: format.KindInsight},
+		},
+	}
+	out := FormatResultsMarkdown("benchmark", results, false)
+
+	// The co-retrieved project-shared entry carries both markers.
+	wantSubstr := `(contradicts "new benchmark") [cross-scope: also in user-personal]`
+	if !strings.Contains(out, wantSubstr) {
+		t.Errorf("heading should carry BOTH paren annotation and cross-scope suffix.\nwant substring: %q\ngot:\n%s", wantSubstr, out)
+	}
+}
+
 func TestFormatResultsMarkdownExpandReturnsFullBody(t *testing.T) {
 	// Build a multi-line body well over shortBodyThreshold (800 chars).
 	// Use many lines so the match-anchored excerpt (±3 lines) is much
