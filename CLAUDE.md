@@ -12,26 +12,15 @@ This is NOT a general-purpose memory tool. For that, use [engram](https://github
 
 ## Status
 
-**Phases 1-3 largely complete.** 181 tests passing across 8 Go packages, binary builds and runs. Actively dogfooding.
-
-Recent git log (most recent first):
-```
-9036036 Add project knowledge entries from intelligence features session
-9fdb806 Add PreCompact extraction pipeline with keyword + LLM backends
-f3b09c3 Add access frequency scoring to search ranking
-50b7f77 Implement mm_close_loop — resolve open loops to archived state
-48f4c5c Implement session-start hook + auto-init .knowledge/
-cd51cfc Rename .mm to .knowledge + smart topic directories
-4ccc5b5 Reverse auto-expire + mm_write goes directly to live store
-```
+**Phases 1-3 complete.** 302 tests passing across 9 Go packages, binary builds and runs. Actively dogfooding. For a current commit log use `git log --oneline -15`; this file doesn't try to stay in sync with HEAD.
 
 ## Read these in order before changing anything
 
 1. **[docs/CONTINUITY.md](docs/CONTINUITY.md)** — THE most important doc. The five load-bearing behaviors (session-start injection, session-close extraction, open-loops as first-class kind, guilt-free review, silent-unless-needed). Any work that doesn't honor these is the wrong work.
 2. **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — package layout, MCP tool surface, CLI subcommands, hook integration.
 3. **[docs/DECISIONS.md](docs/DECISIONS.md)** — why every architectural choice is what it is. Append-only. Read before proposing to change any "why."
-4. **[docs/MEMORY-STACK.md](docs/MEMORY-STACK.md)** — the L0-L3 memory model with per-layer token budgets. L2 (`mm_search` trimmed excerpt) is enforced in code; L0/L1 budgets are documented-only for now.
-5. **[docs/ROADMAP.md](docs/ROADMAP.md)** — Phase 0 through Phase 6. Current phase: **Phase 2** (next to execute).
+4. **[docs/MEMORY-STACK.md](docs/MEMORY-STACK.md)** — the L0-L3 memory model with per-layer token budgets. All four tiers have matching enforcement: L0/L1 soft warnings land in `formatSessionStart` (warn-to-stderr, no truncation); L2 is enforced by `BodyExcerpt()`; L3 is caller-pays by design.
+5. **[docs/ROADMAP.md](docs/ROADMAP.md)** — Phase 0 through Phase 6. Phases 1-3 complete; **Phase 4 (archive tier)** is the next unblocked roadmap item. Distribution (`goreleaser` + Homebrew) is the other unblocked item and is deliberately deferred per user preference.
 6. **[docs/FORMAT.md](docs/FORMAT.md)** — the entry schema. **This is a long-term contract.** Do not change it casually — existing entries will need to keep parsing in 2034.
 7. **[docs/NON-GOALS.md](docs/NON-GOALS.md)** — things explicitly rejected. Read before proposing a new feature.
 8. **[docs/EXTRACTION.md](docs/EXTRACTION.md)** — the capture pipeline spec (Phase 3).
@@ -75,10 +64,11 @@ When Phase 1+ work needs to check "how does X work in reference Y," use context-
 
 ```
 cmd/mastermind/main.go          entry point; version flag, subcommand dispatch, MCP server bootstrap
+internal/config/                env var / config file loading (MASTERMIND_* knobs)
 internal/format/                entry schema, frontmatter parse/validate/marshal
 internal/store/                 three-scope markdown storage; pending invariant enforced at type level
 internal/project/               project name detection (git remote → git root → cwd basename)
-internal/search/                stdlib keyword search + topic-dominant ranking + access frequency scoring
+internal/search/                stdlib keyword search + tiered fallback + ACT-R access scoring + PageRank incoming-link boost
 internal/mcp/                   MCP SDK wiring; the ONLY importer of modelcontextprotocol/go-sdk
 internal/extract/               knowledge extraction from transcripts (keyword + optional LLM backends)
 internal/discover/              autonomous discovery from git history + codebase (Haiku / OpenAI-compat)
@@ -98,7 +88,7 @@ make tidy         # go mod tidy
 make install      # copies bin/mastermind to ~/.local/bin/ (verify first)
 ```
 
-**Always run `make test` and `make vet` before committing.** 181 tests is the current baseline across 8 packages; if a commit lands with fewer, something got silently broken.
+**Always run `make test` and `make vet` before committing.** 302 tests across 9 packages is the current baseline; if a commit lands with fewer, something got silently broken.
 
 ## Git discipline (this repo specifically)
 
@@ -109,31 +99,37 @@ make install      # copies bin/mastermind to ~/.local/bin/ (verify first)
 
 ## Current status
 
-**Phase 2 complete. Phase 3 (extraction) largely complete. Dogfooding in progress.**
+**Phases 1-3 complete. Dogfooding in progress.**
 
 What's working:
 - All four MCP tools functional: `mm_search`, `mm_write`, `mm_promote`, `mm_close_loop`
-- **SessionStart hook** auto-injects open loops + project knowledge at session start
+- **SessionStart hook** auto-injects open loops + project knowledge, with soft L0/L1 token-budget warnings to stderr on overage (no truncation)
 - **PreCompact hook** auto-extracts knowledge from transcripts before context compression
+- **Stop hook** telemetry subcommand (`mastermind stop`)
 - **Auto-init** creates `.knowledge/` with `.gitignore` (excludes `pending/`) in git repos on first use (opt out: `MASTERMIND_NO_AUTO_INIT=1`)
-- **Access frequency scoring** — entries returned by mm_search track access counts, frequently useful entries rank higher
+- **Tiered search ranking** — 7-class tiered fallback, ACT-R log-shaped access boost, project-boost multiplier, supersedes outgoing boost + PageRank-style incoming-link boost from the supersedes/contradicts graph
+- **Contradicts co-retrieval** — `contradicts` targets are pulled into results with an annotation on the heading
+- **Cross-scope "tunnel" annotation** — entries whose topic spans multiple scopes get a `[cross-scope: also in ...]` marker in mm_search output
 - **LLM extraction** (optional) — set `MASTERMIND_EXTRACT_MODE=llm` for Haiku/Ollama-powered extraction
-- **`/mm-extract` skill** — manual extraction command for end-of-session capture
-- **`/mm-review` skill** — verify-first triage: session model checks candidates against their ## Source commits/files, auto-promotes verified, auto-rejects hallucinations, escalates only ambiguous cases to the human
-- **`/mm-discover` skill** — mine codebase + git history for knowledge using Haiku subagents (near-zero cost)
-- **`mastermind discover` CLI** — standalone discovery (no Claude Code session needed), supports Anthropic + any OpenAI-compatible endpoint
+- **`/mm-extract`, `/mm-review`, `/mm-discover` skills** — manual extraction, verify-first triage, and Haiku-driven codebase mining
+- **`mastermind discover` CLI** — standalone discovery, supports Anthropic + any OpenAI-compatible endpoint
 - **PostToolUse suggest** — surfaces the most relevant entry's topic when you Read/Edit/Write a file, with per-file debounce
-- ~35 real entries across `~/.knowledge/` and 3 project stores
 
-What's next:
-1. **goreleaser + Homebrew** — binary distribution for people who don't have Go installed.
-2. **Phase 4 (archive tier)** and **Phase 5 (sync)** per ROADMAP.md
+What's next (all unblocked items):
+1. **Phase 4 (archive tier)** — `~/.knowledge/archive/<year>/<project>/` + `/mm-archive` CLI. ~1 day.
+2. **Phase 5 (sync)** — mostly document the git-remote story in `docs/SYNC.md`. ~half day.
+3. **goreleaser + Homebrew** — binary distribution. Deferred per user preference until other work catches up.
+
+What's blocked on dogfooding evidence:
+- Proper-mode ACT-R with per-access timestamp array — waiting for signs that the count-only fast mode promotes stale entries.
+- LLM tier audit measurement strategy — needs a design decision (regional match vs LLM-as-judge) before any code.
+- Stop-hook auto-capture of low-confidence open loops — Phase 5+ experiment, may produce noise.
 
 ## Known limitations (worth remembering)
 
-- **`PruneStale` errors are silently discarded** in `main.go` per the silent-unless-needed rule. Phase 6 should add a structured log at `~/.knowledge/logs/mastermind.log` with one line per prune error, still silent to the user but inspectable.
 - **`session-close` subcommand is still a stub.** PreCompact hook handles most of the extraction use case, but session-close could be useful for final cleanup.
 - **Access tracking is synchronous** in search. Adds ~50ms for 10 results. Acceptable for current corpus sizes but worth monitoring.
+- **L0/L1 budget warnings go to stderr only.** When a session-start block exceeds its soft budget, `formatSessionStart` warns to stderr (Claude Code's hook log channel). There is no persistent `~/.knowledge/logs/mastermind.log` file yet — if the stderr channel ever stops being the right place (e.g. a future hook runner that swallows it), revisit the logging design.
 
 ## When you get stuck
 

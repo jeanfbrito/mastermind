@@ -94,7 +94,7 @@ This is the piece that makes or breaks the whole project. It is also the piece m
 - [ ] `/mm-review` slash command (Claude Code wrapper calling a `mastermind review` CLI subcommand).
 - [ ] One-at-a-time, keyboard-driven: `k` keep, `x` reject, `e` edit, `s` skip, `q` quit. Five seconds per entry.
 - [ ] Default-accept for open-loops.
-- [ ] 7-day auto-expire is implemented in `internal/store` during Phase 1 (startup pass), not here — but verify it works end-to-end during Phase 3d dogfooding.
+- [x] ~~7-day auto-expire implemented in `internal/store` startup pass.~~ **Reversed 2026-04-06**: pending entries are kept indefinitely; auto-promote (not auto-delete) is an optional policy, off by default. See DECISIONS.md "Reverse auto-expire".
 
 ### Phase 3e — dogfooding and prompt tuning (1-2 weeks of calendar time, ~0.5 days of active work)
 

@@ -99,8 +99,9 @@ CRITICAL for this user. Scan for: "I'll come back to this tomorrow,"
 "let me finish this later," "I should ask Alice about X," "after the
 deploy I'll refactor Y," "remind me to...", or any point where the user
 clearly intended to continue a thread but the conversation ended first.
-Be generous here — false positives are cheap (they auto-expire in 30 days),
-false negatives are expensive (work lost, re-done later).
+Be generous here — false positives are cheap (pending/ is a patient
+review queue, not auto-deleted), false negatives are expensive (work
+lost, re-done later).
 
 Open-loops default to scope: "project-personal" unless the user explicitly
 said it belongs somewhere else.
@@ -209,7 +210,7 @@ This prompts you for scope and kind, builds a full frontmatter block, writes to 
 
 The full review flow is specified in CONTINUITY.md. Key rules (repeated here for Phase 3 implementers):
 
-1. Pending entries **auto-expire after 7 days**. Silent deletion, no nag.
+1. Pending entries **are kept indefinitely**. No nag, no silent deletion. Auto-promote (not auto-delete) is a configurable policy, off by default. See DECISIONS.md "Reverse auto-expire" (2026-04-06).
 2. Review is **one entry at a time**, never a list. Keyboard-driven: `k` keep, `x` reject, `e` edit, `s` skip, `q` quit.
 3. **Default-accept for open-loops**. Review still offers the choice but the default action is keep.
 4. **No counters, no streaks, no gamification.**

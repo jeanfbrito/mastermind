@@ -176,7 +176,7 @@ Concretely, the five behaviors require these additions to the existing Phase 1-5
 3. **An extraction subsystem** that can run detached, invoke an LLM, and write candidates to `pending/`. Phase 3 territory.
 4. **`kind: open-loop`** added to FORMAT.md as a sixth enum value.
 5. **An `mm_close_loop` MCP tool** so the agent can resolve loops as the user works.
-6. **A 7-day auto-expire on `pending/`** — a simple startup pass that deletes stale candidates. No nag, no log line.
+6. **Patient pending queue** — entries stay in `pending/` indefinitely, no auto-expire. Optional auto-promote (not auto-delete) is configurable and off by default. The original 7-day auto-delete pass was reversed 2026-04-06 because silent deletion is the only irreversible failure mode. See DECISIONS.md "Reverse auto-expire".
 7. **An `/mm-review` slash command** that implements the one-entry-at-a-time keyboard flow. Terminal UI, not a TUI framework — just raw stdin reads.
 8. **Claude Code hook installation instructions** in README — how to wire session-start and session-close into the user's Claude Code config. This is a one-time setup cost.
 
@@ -188,7 +188,7 @@ Things that cannot be changed later without violating the continuity layer's pur
 
 1. **Extraction is always automatic and always produces `pending/` entries. Never direct-write.**
 2. **Review is always one-at-a-time, never a list.**
-3. **Pending entries always auto-expire after 7 days. Never nag the user about them.**
+3. **Pending entries are kept indefinitely. Never nag the user about them.** (The original 7-day auto-delete was reversed 2026-04-06 — silent deletion is the only irreversible failure mode. See DECISIONS.md "Reverse auto-expire".)
 4. **Session-start injection is always silent when there's nothing relevant.**
 5. **Open-loops are always surfaced at session start without being asked for.**
 6. **No notifications, no reminders, no badges, ever.**
