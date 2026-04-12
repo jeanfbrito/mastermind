@@ -27,3 +27,7 @@ tasks/todo.md
 
 # Claude Code local state
 .claude/
+
+# Python (Hermes plugin)
+__pycache__/
+*.pyc
