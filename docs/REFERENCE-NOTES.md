@@ -11,6 +11,7 @@ Full per-source reports live in `docs/reference-notes/`:
 - `soulforge.md` — soulforge compaction v2 (WorkingStateManager) + MemPalace integration. Added post-Phase-0 for Phase 3 extraction comparison and Phase 5+ contradiction-detection ideas.
 - `shiba-memory.md` — shiba-memory full Claude Code hook suite (adds PostCompact + Stop), six relation types, tiered extraction (free/LLM), ACT-R scoring modes. Added post-Phase-0 as the closest behavioral peer.
 - `mempalace.md` — mempalace raw-verbatim storage philosophy (LongMemEval 96.6%), the L0-L3 memory stack, palace/wing/room taxonomy, hook-block extraction pattern. Added post-Phase-0 as the philosophical counterpoint on the extraction axis.
+- `gbrain.md` — gbrain (garrytan/gbrain, ~5k stars). TypeScript, Postgres+pgvector, Hermes/OpenClaw-native. Added post-Phase-3 while building the Hermes memory provider. NOT a storage or wiring reference (opposite stack). Two patterns worth tracking: compiled truth + timeline entry shape, and proactive brain-health `maintain` skill.
 
 ## Unlocked decisions
 
