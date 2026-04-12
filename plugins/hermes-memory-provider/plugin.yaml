@@ -1,0 +1,10 @@
+name: mastermind
+version: 1.0.0
+description: "Persistent knowledge base with tiered search, open-loop tracking, and session-start injection. No API key required — uses the local mastermind binary."
+hooks:
+  - system_prompt_block
+  - prefetch
+  - sync_turn
+  - on_memory_write
+  - on_pre_compress
+  - on_session_end
