@@ -64,7 +64,13 @@ mastermind memory stack):
 
 Prefer the default (expand omitted) for session-start queries and
 broad topic sweeps. Use expand:true when you have a specific entry
-in mind and need its full text.`
+in mind and need its full text.
+
+Examples:
+  mm_search(query="auth middleware session tokens")
+  mm_search(queries=["ipc bridge", "context isolation", "preload script"],
+            scopes=["project-personal"], limit=5)
+  mm_search(query="ranking invariants", expand=true)`
 
 // SearchInput is the wire schema for mm_search. All fields are
 // optional at the schema level; runtime validation enforces that
@@ -206,7 +212,24 @@ const mmWriteDescription = `Write an entry directly to the user's live knowledge
 Use for explicit in-session captures — the user is present and the
 write is their decision, so no second review step is needed. Never
 use for session summaries — those are extracted automatically at
-session close into pending/ for review.`
+session close into pending/ for review.
+
+Required fields: topic, body, kind, scope, project, category.
+  kind  ∈ {lesson, insight, war-story, decision, pattern, open-loop}
+  scope ∈ {user-personal, project-shared, project-personal}
+  project: repo name, or "general" for cross-project entries
+  category: topic directory path, 1-2 segments (e.g. "go/modules",
+    "electron/ipc"). Classify by SUBJECT of the lesson, not context.
+
+Optional: tags, date (YYYY-MM-DD, defaults to today UTC), confidence
+(high|medium|low, defaults to high).
+
+Example:
+  mm_write(
+    kind="lesson", scope="project-personal", project="myrepo",
+    category="db/postgres", topic="Short human-readable title",
+    body="## What\n...\n## Why\n...\n## How\n..."
+  )`
 
 // WriteInput is the wire schema for mm_write. The shape mirrors
 // format.Metadata but uses plain strings instead of enum types so the
@@ -277,7 +300,13 @@ func (s *Server) handleWrite(ctx context.Context, req *mcpsdk.CallToolRequest, i
 const mmPromoteDescription = `Move an entry from pending/ to the live store.
 Only call when the user has explicitly reviewed and approved a pending
 candidate. Do NOT auto-promote — promotion is the user's decision.
-Returns the new live-store path.`
+Returns the new live-store path.
+
+Required: pending_path — absolute path to a file under a <scope>/pending/
+directory (typically surfaced by mm_search with include_pending=true).
+
+Example:
+  mm_promote(pending_path="/Users/.../project-personal/pending/lesson-foo.md")`
 
 type PromoteInput struct {
 	PendingPath string `json:"pending_path" jsonschema:"absolute path to the pending entry to promote; must live under a <scope>/pending/ directory"`
@@ -302,7 +331,17 @@ Call when the user signals closure of something previously captured
 as an open-loop ("ok, that refactor is done", "shipped the fix",
 "that bug is closed"). Moves the entry so it stops appearing in
 future session-start injections. Does NOT delete — resolved loops are
-archived for history.`
+archived for history.
+
+Required: entry_path — absolute path to the open-loop entry (from a
+prior mm_search result or the SessionStart open-loops list).
+Optional: resolution — one-line note appended before archiving.
+
+Example:
+  mm_close_loop(
+    entry_path="/Users/.../project-personal/mastermind/mcp-ux/inline-mm-write-schema-example.md",
+    resolution="Shipped in commit abc1234 — schema + examples now in tool descriptions."
+  )`
 
 type CloseLoopInput struct {
 	PendingPath string `json:"entry_path" jsonschema:"absolute path to the open-loop entry to resolve (from a prior mm_search result)"`
