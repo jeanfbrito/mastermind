@@ -156,6 +156,50 @@ func main() {
 // (two unrelated projects that normalize to the same name): a future
 // MASTERMIND_PROJECT_DIR env var can override this path. Not
 // implemented yet — add it when a real collision surfaces, not before.
+// ensureKnowledgeGitignore makes .knowledge/.gitignore contain both
+// `pending/` and `.cache/` entries. Idempotent: creates the file if
+// missing, appends only missing lines if present. Best-effort — silent
+// on any error. Skips work if knowledgeDir doesn't exist.
+func ensureKnowledgeGitignore(knowledgeDir string) {
+	if knowledgeDir == "" {
+		return
+	}
+	if info, err := os.Stat(knowledgeDir); err != nil || !info.IsDir() {
+		return
+	}
+	gi := filepath.Join(knowledgeDir, ".gitignore")
+	want := []string{"pending/", ".cache/"}
+	data, err := os.ReadFile(gi)
+	if os.IsNotExist(err) {
+		_ = os.WriteFile(gi, []byte("pending/\n.cache/\n"), 0o644)
+		return
+	}
+	if err != nil {
+		return
+	}
+	have := map[string]bool{}
+	for _, line := range strings.Split(string(data), "\n") {
+		have[strings.TrimSpace(line)] = true
+	}
+	var missing []string
+	for _, w := range want {
+		if !have[w] {
+			missing = append(missing, w)
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	buf := string(data)
+	if len(buf) > 0 && !strings.HasSuffix(buf, "\n") {
+		buf += "\n"
+	}
+	for _, m := range missing {
+		buf += m + "\n"
+	}
+	_ = os.WriteFile(gi, []byte(buf), 0o644)
+}
+
 func buildSessionConfig(cwd string) (store.Config, error) {
 	cfg, err := store.DefaultConfig()
 	if err != nil {
@@ -164,6 +208,7 @@ func buildSessionConfig(cwd string) (store.Config, error) {
 
 	if root := store.FindProjectRoot(cwd); root != "" {
 		cfg.ProjectSharedRoot = filepath.Join(root, ".knowledge")
+		ensureKnowledgeGitignore(cfg.ProjectSharedRoot)
 	} else if os.Getenv("MASTERMIND_NO_AUTO_INIT") == "" {
 		// Auto-create .knowledge/ at the git root so project-shared
 		// scope works out of the box. Without this, agents silently
@@ -173,14 +218,12 @@ func buildSessionConfig(cwd string) (store.Config, error) {
 			knowledgeDir := filepath.Join(gitRoot, ".knowledge")
 			if err := os.MkdirAll(knowledgeDir, 0o755); err == nil {
 				cfg.ProjectSharedRoot = knowledgeDir
-				// Seed .gitignore so pending/ (auto-extracted, pre-review)
-				// stays out of version control.
-				gi := filepath.Join(knowledgeDir, ".gitignore")
-				if _, err := os.Stat(gi); os.IsNotExist(err) {
-					_ = os.WriteFile(gi, []byte("pending/\n"), 0o644)
-				}
+				ensureKnowledgeGitignore(knowledgeDir)
 			}
 		}
+	}
+	if cfg.UserPersonalRoot != "" {
+		ensureKnowledgeGitignore(cfg.UserPersonalRoot)
 	}
 
 	if slug := project.DetectFromGit(cwd); slug != "" {

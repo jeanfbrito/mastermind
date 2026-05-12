@@ -145,6 +145,7 @@ var operationalDirs = map[string]bool{
 	"pending":        true,
 	"archive":        true,
 	"resolved-loops": true,
+	".cache":         true,
 }
 
 // pendingDir is "pending" for every scope. Consistency matters more

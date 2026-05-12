@@ -858,6 +858,91 @@ func TestResolveTopicDirNoTags(t *testing.T) {
 	}
 }
 
+// ─── access sidecar regression ────────────────────────────────────────
+
+// TestIncrementAccessDoesNotMutateMarkdown confirms that calling
+// IncrementAccess never rewrites the markdown file. The file's mtime
+// must remain unchanged across N calls.
+func TestIncrementAccessDoesNotMutateMarkdown(t *testing.T) {
+	s, _ := newTestStore(t)
+
+	entry := makeEntry(format.ScopeUserPersonal, "sidecar no-mutation test")
+	pending, err := s.Write(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	livePath, err := s.Promote(pending)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Record mtime before any access tracking.
+	info0, err := os.Stat(livePath)
+	if err != nil {
+		t.Fatalf("stat before: %v", err)
+	}
+	mtimeBefore := info0.ModTime()
+
+	// Call IncrementAccess several times.
+	now := time.Now()
+	for i := 0; i < 5; i++ {
+		s.IncrementAccess(livePath, now)
+	}
+
+	// mtime must be unchanged.
+	info1, err := os.Stat(livePath)
+	if err != nil {
+		t.Fatalf("stat after: %v", err)
+	}
+	if !info1.ModTime().Equal(mtimeBefore) {
+		t.Errorf("IncrementAccess mutated the markdown file: mtime before=%v after=%v",
+			mtimeBefore, info1.ModTime())
+	}
+}
+
+// TestAccessSidecarHydratesMetadata confirms that after IncrementAccess
+// calls, a subsequent ListLive returns refs with the access count
+// reflected in Metadata.Accessed (read from the sidecar, not from YAML).
+func TestAccessSidecarHydratesMetadata(t *testing.T) {
+	s, _ := newTestStore(t)
+
+	entry := makeEntry(format.ScopeUserPersonal, "sidecar hydration test")
+	pending, err := s.Write(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	livePath, err := s.Promote(pending)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now()
+	for i := 0; i < 7; i++ {
+		s.IncrementAccess(livePath, now)
+	}
+
+	refs, err := s.ListLive(format.ScopeUserPersonal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(refs) == 0 {
+		t.Fatal("ListLive returned no refs")
+	}
+	var found bool
+	for _, r := range refs {
+		if r.Path == livePath {
+			found = true
+			if r.Metadata.Accessed != 7 {
+				t.Errorf("Metadata.Accessed = %d, want 7", r.Metadata.Accessed)
+			}
+			break
+		}
+	}
+	if !found {
+		t.Errorf("promoted entry not found in ListLive results")
+	}
+}
+
 func TestResolveTopicDirSkipsOperationalDirs(t *testing.T) {
 	s, cfg := newTestStore(t)
 	root := cfg.UserPersonalRoot

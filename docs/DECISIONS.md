@@ -624,6 +624,27 @@ The bias is opposite to the ACT-R "proper mode" open-loop, which is gated on dog
 
 ---
 
+## 2026-05-12 — Access telemetry moved to sidecar JSON
+
+**Decision**: `IncrementAccess` no longer rewrites markdown frontmatter. Access counts and last-accessed dates are stored in a per-scope-root sidecar at `<root>/.cache/access.json`. The sidecar is loaded lazily into memory on first search, and `Metadata.Accessed` / `Metadata.LastAccessed` are hydrated from it after parsing each markdown file. The markdown files themselves are never written during search.
+
+**Rationale**: Access counts are mutable telemetry — they are not knowledge content. Writing them into YAML frontmatter on every `mm_search` call caused every returned entry to become dirty in git, forcing users who version `.knowledge/` to constantly deal with noise commits of numeric counter changes. This violated the spirit of hard rule #3 ("markdown files are the source of truth") by making the markdown files unstable under normal use. The sidecar keeps markdown immutable on read.
+
+**Sidecar is ephemeral telemetry, not a derived cache**: Access counts are NOT derivable from markdown content — they accumulate from runtime behaviour only. The sidecar is therefore categorised as ephemeral telemetry, not a "derived cache" in the sense of hard rule #3. Deleting `.cache/access.json` resets ranking warmth to cold but does not lose any knowledge. Re-seeding from legacy frontmatter values happens automatically on the next `ListLive` pass (the migration is silent and one-way).
+
+**Back-compat**: The `Accessed` and `LastAccessed` YAML fields are retained in `format.Metadata` for parsing old entries. They are not written by any new code path (the `omitempty` tags already suppress zero values). On first `ListLive` after the upgrade, entries with non-zero frontmatter values are silently seeded into the sidecar so ranking warmth is preserved.
+
+**Sidecar location**: `<scope-root>/.cache/access.json`. Each scope gets its own sidecar so project telemetry stays local to the repo and user-scope telemetry stays in `~/.knowledge/.cache/`. The `.cache/` directory is added to `operationalDirs` (skipped by `ListLive`) and to the auto-generated `.gitignore` seed alongside `pending/`.
+
+**JSON shape**: `{"version":1,"entries":{"<abs-path>":{"count":N,"last":"YYYY-MM-DD"}}}`. Version field reserved for future schema changes.
+
+**Alternatives considered**:
+- *Keep frontmatter, add a flush-on-close strategy*: still mutates markdown; just defers the dirt. Rejected — the git noise is the core problem.
+- *SQLite for telemetry*: heavier dep, binary file, harder to inspect. Rejected — JSON is inspectable, tiny, and fits the stdlib-only constraint for this package.
+- *Store counts in memory only (no persistence)*: ranking warmth would reset on every server restart. Rejected — the ACT-R boost is only useful if it survives across sessions.
+
+---
+
 ## TBD — project-personal sync strategy
 
 **Status**: Open.

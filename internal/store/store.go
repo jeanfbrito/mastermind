@@ -31,6 +31,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/jeanfbrito/mastermind/internal/access"
 	"github.com/jeanfbrito/mastermind/internal/format"
 )
 
@@ -48,7 +49,8 @@ var ErrEntryExists = errors.New("store: target entry already exists")
 // to the same path are not coordinated (filesystem atomics cover the
 // single-writer case, which is all mastermind needs).
 type Store struct {
-	cfg Config
+	cfg      Config
+	trackers map[string]*access.Tracker // key: scope root (absolute path)
 }
 
 // New constructs a Store from the given Config. It does NOT create any
@@ -59,13 +61,41 @@ func New(cfg Config) *Store {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	return &Store{cfg: cfg}
+	return &Store{
+		cfg:      cfg,
+		trackers: make(map[string]*access.Tracker),
+	}
 }
 
 // Config returns a copy of the store's configuration. Useful for tests
 // and for components that need to know which roots are active.
 func (s *Store) Config() Config {
 	return s.cfg
+}
+
+// trackerFor returns (lazily creating) the access.Tracker for the scope
+// root that contains the given absolute entry path. Returns nil if no
+// configured scope root claims the path — callers must nil-check.
+func (s *Store) trackerFor(path string) *access.Tracker {
+	_, root := s.scopeOfPath(path)
+	if root == "" {
+		// Fall back to path-derived root (entries in unconfigured scopes,
+		// e.g. a project the MCP server wasn't launched in).
+		derived, err := rootFromLivePath(path)
+		if err != nil {
+			return nil
+		}
+		root = derived
+	}
+	if root == "" {
+		return nil
+	}
+	if tr, ok := s.trackers[root]; ok {
+		return tr
+	}
+	tr := access.New(root)
+	s.trackers[root] = tr
+	return tr
 }
 
 // EntryRef is a lightweight handle to an entry on disk. It contains the
@@ -310,9 +340,24 @@ func (s *Store) listLiveRecursive(root string, scope format.Scope) ([]EntryRef, 
 		if parseErr != nil {
 			return nil // skip malformed files
 		}
+		// Hydrate access telemetry from sidecar (or seed sidecar from
+		// legacy frontmatter on first encounter). Markdown is never written.
+		md := entry.Metadata
+		if tr := s.trackerFor(path); tr != nil {
+			count, last := tr.Get(path)
+			if count == 0 && md.Accessed > 0 {
+				// Legacy frontmatter has data the sidecar hasn't seen yet.
+				// Seed it silently so warm ranking survives the migration.
+				tr.Seed(path, md.Accessed, md.LastAccessed)
+				tr.Save()
+				count, last = md.Accessed, md.LastAccessed
+			}
+			md.Accessed = count
+			md.LastAccessed = last
+		}
 		refs = append(refs, EntryRef{
 			Path:     path,
-			Metadata: entry.Metadata,
+			Metadata: md,
 			Scope:    scope,
 			Pending:  false,
 		})
@@ -479,27 +524,16 @@ func (s *Store) WriteLive(entry *format.Entry) (string, error) {
 	return target, nil
 }
 
-// IncrementAccess bumps the accessed counter and updates last_accessed
-// for the entry at the given path. Best-effort: errors are silently
-// discarded because access tracking is a nice-to-have, not a
-// correctness requirement. The caller should never block on this.
+// IncrementAccess records an access for the entry at the given path in
+// the sidecar JSON cache. The markdown file is never modified.
+// Best-effort: errors are silently discarded because access tracking is
+// a nice-to-have, not a correctness requirement.
 func (s *Store) IncrementAccess(path string, now time.Time) {
-	data, err := os.ReadFile(path)
-	if err != nil {
+	tr := s.trackerFor(path)
+	if tr == nil {
 		return
 	}
-	entry, err := format.Parse(data)
-	if err != nil {
-		return
-	}
-	entry.Metadata.Accessed++
-	entry.Metadata.LastAccessed = now.UTC().Format("2006-01-02")
-
-	out, err := entry.MarshalMarkdown()
-	if err != nil {
-		return
-	}
-	_ = writeFileAtomic(path, out)
+	tr.Increment(path, now)
 }
 
 // CloseLoop moves an open-loop entry to <scope>/resolved-loops/ so it
