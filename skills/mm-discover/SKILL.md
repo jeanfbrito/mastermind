@@ -1,3 +1,8 @@
+---
+name: mm-discover
+description: Mine a codebase and git history for missing mastermind knowledge using git, codebase, or combined discovery modes.
+---
+
 # /mm-discover — Autonomous Knowledge Discovery
 
 Mine the codebase and git history for knowledge that should be in mastermind but isn't. Uses Haiku subagents for all heavy lifting to minimize token cost.

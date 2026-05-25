@@ -1,3 +1,8 @@
+---
+name: mm-extract
+description: Extract durable lessons, decisions, patterns, war stories, and open loops from the current session into mastermind.
+---
+
 # /mm-extract — Extract Session Knowledge to Mastermind
 
 Trigger: `/mm-extract`

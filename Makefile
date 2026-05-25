@@ -3,7 +3,7 @@ PKG    := ./cmd/mastermind
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 
-.PHONY: all build run test vet fmt tidy clean install
+.PHONY: all build run test vet fmt tidy clean install install-codex
 
 all: build
 
@@ -31,3 +31,6 @@ clean:
 
 install: build
 	install -m 0755 bin/$(BINARY) $$HOME/.local/bin/$(BINARY)
+
+install-codex:
+	./install/codex.sh

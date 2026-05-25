@@ -28,6 +28,19 @@ No commands to remember. No dashboards. The default state is invisible.
 
 ## Install
 
+For Codex:
+
+```bash
+git clone https://github.com/jeanfbrito/mastermind.git
+cd mastermind
+./install/codex.sh
+```
+
+See [docs/CODEX.md](docs/CODEX.md) for portable options, including custom
+agent homes and prebuilt binary paths.
+
+For a standalone binary:
+
 ```bash
 go install github.com/jeanfbrito/mastermind/cmd/mastermind@latest
 ```
@@ -42,7 +55,7 @@ make build && make install
 
 Requires Go 1.25+.
 
-## Setup
+## Claude Code setup
 
 ### 1. Register the MCP server
 
@@ -127,7 +140,7 @@ mastermind organizes knowledge into three scopes, all searched automatically:
 
 ## Skills (optional)
 
-mastermind ships three Claude Code slash commands for manual workflows:
+mastermind ships three agent skills for manual workflows:
 
 | Skill | Trigger | Description |
 |-------|---------|-------------|
@@ -135,13 +148,15 @@ mastermind ships three Claude Code slash commands for manual workflows:
 | **mm-review** | `/mm-review` | Verify pending entries against their sources (commits/files), auto-promote clean ones, auto-reject hallucinations, escalate only ambiguous cases to you |
 | **mm-discover** | `/mm-discover [git\|codebase\|all]` | Mine the codebase and git history for knowledge using Haiku subagents (near-zero cost) |
 
-Install by symlinking into your Claude Code skills directory:
+Install by symlinking into your agent skills directory:
 
 ```bash
 ln -s /path/to/mastermind/skills/mm-extract ~/.claude/skills/mm-extract
 ln -s /path/to/mastermind/skills/mm-review ~/.claude/skills/mm-review
 ln -s /path/to/mastermind/skills/mm-discover ~/.claude/skills/mm-discover
 ```
+
+For Codex, `./install/codex.sh` installs these into `~/.codex/skills`.
 
 These are optional — the hooks handle capture and retrieval automatically. Skills are for when you want manual control: extracting knowledge before session end, reviewing what auto-extraction captured, or seeding knowledge from an existing codebase.
 
@@ -245,6 +260,7 @@ Fully incremental: `## Source` sections in entries track which commits have been
 | Doc | Contents |
 |-----|----------|
 | [CONTINUITY.md](docs/CONTINUITY.md) | Core behaviors: session-start injection, extraction, open-loop lifecycle |
+| [CODEX.md](docs/CODEX.md) | Codex MCP and skill install |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Package layout, MCP tool surface, hook integration |
 | [FORMAT.md](docs/FORMAT.md) | Entry schema — the long-term contract |
 | [DECISIONS.md](docs/DECISIONS.md) | Architectural decision log |

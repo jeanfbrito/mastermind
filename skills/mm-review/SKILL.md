@@ -1,3 +1,8 @@
+---
+name: mm-review
+description: Review mastermind pending knowledge entries, verify them against source commits and files, promote clean entries, reject hallucinations, and escalate ambiguous cases.
+---
+
 # /mm-review — Verify and Triage Pending Knowledge Entries
 
 Review auto-extracted entries from mastermind's pending queue. The current session model (Opus/Sonnet) verifies Haiku-generated candidates against their source commits and files, auto-promotes what's clean, auto-rejects hallucinations, and escalates only ambiguous cases to the human.
