@@ -31,3 +31,4 @@ tasks/todo.md
 # Python (Hermes plugin)
 __pycache__/
 *.pyc
+.localdev/
