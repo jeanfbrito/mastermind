@@ -262,3 +262,52 @@ func TestPostCompactDispatch_GracefulWhenNoKnowledge(t *testing.T) {
 		t.Errorf("runPostCompact produced unexpected output: %q", buf.String())
 	}
 }
+
+// ─── collectOpenLoops (session-start) ─────────────────────────────────
+
+// TestCollectOpenLoops_UserPersonalFilteredByProject verifies that
+// session-start shows user-personal loops (live and pending) only for
+// the active project, plus untagged ones, while project-scoped loops
+// always show.
+func TestCollectOpenLoops_UserPersonalFilteredByProject(t *testing.T) {
+	cfg, _ := makeProjectStore(t)
+	if err := os.MkdirAll(cfg.UserPersonalRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s := store.New(cfg)
+
+	tagged := func(topic, project string) *format.Entry {
+		e := makeEntry(topic, format.KindOpenLoop, format.ScopeUserPersonal)
+		e.Metadata.Project = project
+		return e
+	}
+	seedEntry(t, s, tagged("this project live loop", "testproject"))
+	seedEntry(t, s, tagged("other project live loop", "otherproject"))
+	seedEntry(t, s, tagged("untagged live loop", "general"))
+	if _, err := s.Write(tagged("this project pending loop", "TestProject")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Write(tagged("other project pending loop", "otherproject")); err != nil {
+		t.Fatal(err)
+	}
+	seedEntry(t, s, makeEntry("project shared loop", format.KindOpenLoop, format.ScopeProjectShared))
+
+	loops, err := collectOpenLoops(s, "testproject")
+	if err != nil {
+		t.Fatalf("collectOpenLoops: %v", err)
+	}
+	got := map[string]bool{}
+	for _, l := range loops {
+		got[l.Metadata.Topic] = true
+	}
+	for _, want := range []string{"this project live loop", "untagged live loop", "this project pending loop", "project shared loop"} {
+		if !got[want] {
+			t.Errorf("missing loop %q; got %v", want, got)
+		}
+	}
+	for _, unwanted := range []string{"other project live loop", "other project pending loop"} {
+		if got[unwanted] {
+			t.Errorf("loop %q from another project should be filtered out", unwanted)
+		}
+	}
+}

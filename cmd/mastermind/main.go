@@ -354,8 +354,8 @@ func runSessionStart() error {
 	s := store.New(cfg)
 	projectName := project.DetectFromGit(cwd)
 
-	// Collect open loops from all scopes (live + pending).
-	openLoops, err := collectOpenLoops(s)
+	// Collect open loops for this project (live + pending).
+	openLoops, err := collectOpenLoops(s, projectName)
 	if err != nil {
 		return fmt.Errorf("collect open loops: %w", err)
 	}
@@ -461,11 +461,18 @@ func entrySummariesFromRefs(refs []store.EntryRef) []entrySummary {
 	return out
 }
 
-// collectOpenLoops gathers all open-loop entries from live and pending
-// across all three scopes. Open loops are the most critical thing to
-// surface — they represent in-progress work that would otherwise be
-// forgotten.
-func collectOpenLoops(s *store.Store) ([]store.EntryRef, error) {
+// collectOpenLoops gathers the open-loop entries for the active
+// project from live and pending, per CONTINUITY.md ("all current
+// open-loops for the active project"). Open loops are the most critical
+// thing to surface — they represent in-progress work that would
+// otherwise be forgotten.
+//
+// Project-shared and project-personal loops belong to this project by
+// definition. User-personal loops are shared across every project, so
+// only those tagged with this project, or with no project, are shown.
+// Without that filter every loop extracted anywhere lands in every
+// session: by 2026-10-04 that was 93 loops and 3000 tokens of L0.
+func collectOpenLoops(s *store.Store, projectName string) ([]store.EntryRef, error) {
 	var loops []store.EntryRef
 
 	for _, scope := range format.AllScopes() {
@@ -473,26 +480,34 @@ func collectOpenLoops(s *store.Store) ([]store.EntryRef, error) {
 		if err != nil {
 			return nil, err
 		}
-		for _, ref := range live {
-			if ref.Metadata.Kind == format.KindOpenLoop {
-				loops = append(loops, ref)
-			}
-		}
-
 		pending, err := s.ListPending(scope)
 		if err != nil {
 			return nil, err
 		}
-		for _, ref := range pending {
-			if ref.Metadata.Kind == format.KindOpenLoop {
-				loops = append(loops, ref)
+		for _, ref := range append(live, pending...) {
+			if ref.Metadata.Kind != format.KindOpenLoop {
+				continue
 			}
+			if scope == format.ScopeUserPersonal && !loopBelongsTo(ref.Metadata.Project, projectName) {
+				continue
+			}
+			loops = append(loops, ref)
 		}
 	}
 
 	// Sort by date descending (newest first).
 	sortByDateDesc(loops)
 	return loops, nil
+}
+
+// loopBelongsTo reports whether a user-personal loop tagged with
+// project should surface in a session for current. Untagged loops
+// ("" or the extractor's "general") are cross-project and always show.
+func loopBelongsTo(project, current string) bool {
+	if project == "" || strings.EqualFold(project, "general") {
+		return true
+	}
+	return current != "" && strings.EqualFold(project, current)
 }
 
 // collectProjectEntries gathers non-open-loop entries relevant to the
