@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/jeanfbrito/mastermind/internal/format"
 	"github.com/jeanfbrito/mastermind/internal/search"
@@ -326,16 +327,18 @@ func (s *Server) handlePromote(ctx context.Context, req *mcpsdk.CallToolRequest,
 
 // ─── mm_close_loop ──────────────────────────────────────────────────────
 
-const mmCloseLoopDescription = `Mark an open-loop as resolved.
+const mmCloseLoopDescription = `Mark open-loops as resolved.
 Call when the user signals closure of something previously captured
 as an open-loop ("ok, that refactor is done", "shipped the fix",
-"that bug is closed"). Moves the entry so it stops appearing in
+"that bug is closed"). Moves each entry so it stops appearing in
 future session-start injections. Does NOT delete — resolved loops are
 archived for history.
 
-Required: entry_path — absolute path to the open-loop entry (from a
-prior mm_search result or the SessionStart open-loops list).
-Optional: resolution — one-line note appended before archiving.
+Required: entry_path (one loop) or entry_paths (several, closed in one
+call) — absolute paths to open-loop entries. The SessionStart list
+shows topics only; mm_search(query=<topic words>, kinds=["open-loop"],
+include_pending=true) returns each loop's path.
+Optional: resolution — one-line note appended to every closed entry.
 
 Example:
   mm_close_loop(
@@ -344,18 +347,44 @@ Example:
   )`
 
 type CloseLoopInput struct {
-	PendingPath string `json:"entry_path" jsonschema:"absolute path to the open-loop entry to resolve (from a prior mm_search result)"`
-	Resolution  string `json:"resolution,omitempty" jsonschema:"optional one-line note about how the loop was resolved; appended to the entry before archiving"`
+	PendingPath string   `json:"entry_path,omitempty" jsonschema:"absolute path to one open-loop entry to resolve (from a prior mm_search result)"`
+	EntryPaths  []string `json:"entry_paths,omitempty" jsonschema:"absolute paths to several open-loop entries to resolve in one call"`
+	Resolution  string   `json:"resolution,omitempty" jsonschema:"optional one-line note about how the loop was resolved; appended to each entry before archiving"`
 }
 
 type CloseLoopOutput struct {
-	ResolvedPath string `json:"resolved_path" jsonschema:"absolute path where the resolved loop now lives"`
+	ResolvedPath  string   `json:"resolved_path,omitempty" jsonschema:"absolute path where the resolved loop now lives (single entry_path)"`
+	ResolvedPaths []string `json:"resolved_paths,omitempty" jsonschema:"absolute paths where the resolved loops now live (entry_paths)"`
+	Failed        []string `json:"failed,omitempty" jsonschema:"entries that could not be closed, as 'path: error'"`
 }
 
 func (s *Server) handleCloseLoop(ctx context.Context, req *mcpsdk.CallToolRequest, in CloseLoopInput) (*mcpsdk.CallToolResult, CloseLoopOutput, error) {
-	resolvedPath, err := s.opts.Store.CloseLoop(in.PendingPath, in.Resolution)
-	if err != nil {
-		return nil, CloseLoopOutput{}, err
+	if len(in.EntryPaths) == 0 {
+		if in.PendingPath == "" {
+			return nil, CloseLoopOutput{}, fmt.Errorf("mm_close_loop: entry_path or entry_paths is required")
+		}
+		resolvedPath, err := s.opts.Store.CloseLoop(in.PendingPath, in.Resolution)
+		if err != nil {
+			return nil, CloseLoopOutput{}, err
+		}
+		return nil, CloseLoopOutput{ResolvedPath: resolvedPath}, nil
 	}
-	return nil, CloseLoopOutput{ResolvedPath: resolvedPath}, nil
+
+	paths := in.EntryPaths
+	if in.PendingPath != "" {
+		paths = append([]string{in.PendingPath}, paths...)
+	}
+	var out CloseLoopOutput
+	for _, p := range paths {
+		resolvedPath, err := s.opts.Store.CloseLoop(p, in.Resolution)
+		if err != nil {
+			out.Failed = append(out.Failed, fmt.Sprintf("%s: %v", p, err))
+			continue
+		}
+		out.ResolvedPaths = append(out.ResolvedPaths, resolvedPath)
+	}
+	if len(out.ResolvedPaths) == 0 {
+		return nil, CloseLoopOutput{}, fmt.Errorf("mm_close_loop: no loop closed: %s", strings.Join(out.Failed, "; "))
+	}
+	return nil, out, nil
 }
