@@ -140,10 +140,18 @@ func (k *KeywordExtractor) Extract(transcript string, existingTopics []string) (
 			skipLine[i] = true
 		}
 	}
+	assistant := assistantLines(lines)
 
 	for _, pat := range patterns {
 		for i, line := range lines {
 			if skipLine[i] {
+				continue
+			}
+			// An open loop is something the user left unfinished. In an
+			// agent's own turns, "still need to" is working narration
+			// ("I still need to check the elbows"), so those turns never
+			// yield open loops.
+			if pat.kind == format.KindOpenLoop && assistant[i] {
 				continue
 			}
 			if !pat.re.MatchString(line) {
@@ -200,6 +208,25 @@ func (k *KeywordExtractor) Extract(transcript string, existingTopics []string) (
 	}
 
 	return entries, nil
+}
+
+// assistantLines marks the lines inside "Assistant: " turns of a
+// transcript normalized by NormalizeTranscript. A turn runs from its
+// role prefix to the next one. Plain-text transcripts carry no prefixes,
+// so every line stays unmarked.
+func assistantLines(lines []string) []bool {
+	marks := make([]bool, len(lines))
+	inAssistant := false
+	for i, line := range lines {
+		switch {
+		case strings.HasPrefix(line, "Assistant: "):
+			inAssistant = true
+		case strings.HasPrefix(line, "User: "):
+			inAssistant = false
+		}
+		marks[i] = inAssistant
+	}
+	return marks
 }
 
 // deriveTopic extracts a topic string from the matched line.

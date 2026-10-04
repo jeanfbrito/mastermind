@@ -126,3 +126,38 @@ func TestNormalizeTranscript_StripsNoiseInRealShape(t *testing.T) {
 		t.Errorf("real assistant text missing from output: %q", out)
 	}
 }
+
+func TestNormalizeTranscript_SkipsClaudeMetaLines(t *testing.T) {
+	in := `{"type":"user","isMeta":true,"message":{"role":"user","content":"TODO: injected skill body"}}` + "\n" +
+		`{"type":"user","message":{"role":"user","content":"real question"}}`
+	out := NormalizeTranscript(in)
+	want := "User: real question\n\n"
+	if out != want {
+		t.Errorf("isMeta lines should be skipped\ngot:  %q\nwant: %q", out, want)
+	}
+}
+
+func TestNormalizeTranscript_CursorRoleLines(t *testing.T) {
+	in := `{"role":"user","message":{"content":[{"type":"text","text":"Q1"}]}}` + "\n" +
+		`{"role":"assistant","message":{"content":[{"type":"text","text":"A1"},{"type":"tool_use","name":"Write","input":{"contents":"still need to"}}]}}` + "\n" +
+		`{"type":"turn_ended","status":"success"}`
+	out := NormalizeTranscript(in)
+	want := "User: Q1\n\nAssistant: A1\n\n"
+	if out != want {
+		t.Errorf("cursor transcript not normalized\ngot:  %q\nwant: %q", out, want)
+	}
+}
+
+func TestNormalizeTranscript_ACPChunksJoinAndThoughtsDrop(t *testing.T) {
+	in := `{"timestamp":1,"method":"session/update","params":{"update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"build it"}}}}` + "\n" +
+		`{"timestamp":2,"method":"session/update","params":{"update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"I still need to read the skill."}}}}` + "\n" +
+		`{"timestamp":3,"method":"_x.ai/session/update","params":{"update":{"sessionUpdate":"hook_execution","event_name":"post_tool_use"}}}` + "\n" +
+		`{"timestamp":4,"method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"On "}}}}` + "\n" +
+		`{"timestamp":5,"method":"session/update","params":{"update":{"sessionUpdate":"tool_call","toolCallId":"call-1"}}}` + "\n" +
+		`{"timestamp":6,"method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"it."}}}}`
+	out := NormalizeTranscript(in)
+	want := "User: build it\n\nAssistant: On it.\n\n"
+	if out != want {
+		t.Errorf("ACP transcript not normalized\ngot:  %q\nwant: %q", out, want)
+	}
+}
