@@ -547,6 +547,15 @@ func (s *Store) IncrementAccess(path string, now time.Time) {
 // Resolved loops are never deleted — they're archived for history. The
 // resolved-loops/ directory is skipped by ListLive (it's in operationalDirs)
 // so resolved entries don't pollute search results.
+//
+// A loop closed straight from pending/ was never reviewed, so its body
+// is raw extractor output. It is archived beside the queue instead, in
+// pending/resolved-loops/ under its pending file name: the pending/
+// gitignore keeps it out of a project's git history, and listDir's flat
+// read keeps it out of ListPending.
+//
+// An archive name already taken gets a numeric suffix. Archiving by
+// topic slug alone once let same-topic loops overwrite each other.
 func (s *Store) CloseLoop(entryPath string, resolution string) (string, error) {
 	abs, err := filepath.Abs(entryPath)
 	if err != nil {
@@ -588,12 +597,16 @@ func (s *Store) CloseLoop(entryPath string, resolution string) (string, error) {
 	}
 
 	resolvedDir := filepath.Join(root, "resolved-loops")
+	name := liveFileName(entry.Metadata.Topic)
+	if filepath.Base(filepath.Dir(abs)) == pendingDirName {
+		resolvedDir = filepath.Join(root, pendingDirName, "resolved-loops")
+		name = filepath.Base(abs)
+	}
 	if err := os.MkdirAll(resolvedDir, 0o755); err != nil {
 		return "", fmt.Errorf("store: mkdir resolved-loops: %w", err)
 	}
 
-	name := liveFileName(entry.Metadata.Topic)
-	target := filepath.Join(resolvedDir, name)
+	target := freePath(filepath.Join(resolvedDir, name))
 
 	outData, err := entry.MarshalMarkdown()
 	if err != nil {
@@ -609,6 +622,22 @@ func (s *Store) CloseLoop(entryPath string, resolution string) (string, error) {
 	_ = os.Remove(abs)
 
 	return target, nil
+}
+
+// freePath returns path if nothing exists there, else the first of
+// "<name>-2.md", "<name>-3.md", ... that is free.
+func freePath(path string) string {
+	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		return path
+	}
+	ext := filepath.Ext(path)
+	base := strings.TrimSuffix(path, ext)
+	for n := 2; ; n++ {
+		candidate := fmt.Sprintf("%s-%d%s", base, n, ext)
+		if _, err := os.Stat(candidate); errors.Is(err, fs.ErrNotExist) {
+			return candidate
+		}
+	}
 }
 
 // ─── topic directory resolution ────────────────────────────────────────

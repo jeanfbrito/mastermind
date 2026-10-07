@@ -549,6 +549,79 @@ func TestHandleCloseLoopBogusPath(t *testing.T) {
 	}
 }
 
+func TestHandleCloseLoopBatchKeepsSameTopicArchives(t *testing.T) {
+	srv, s := newTestServer(t)
+
+	// Two pending loops with one topic, as the extractor writes them
+	// from two sessions, plus a live loop with the same topic.
+	loop := func() *format.Entry {
+		return &format.Entry{
+			Metadata: format.Metadata{
+				Date:    "2026-09-30",
+				Topic:   "compare recoil angles",
+				Kind:    format.KindOpenLoop,
+				Scope:   format.ScopeUserPersonal,
+				Project: "mastermind",
+			},
+			Body: "raw extractor window",
+		}
+	}
+	first, err := s.Write(loop())
+	if err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	second := strings.Replace(first, "/pending/", "/pending/1-", 1)
+	data, err := os.ReadFile(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(second, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	live, err := s.WriteLive(loop())
+	if err != nil {
+		t.Fatalf("WriteLive: %v", err)
+	}
+	liveTwin := strings.TrimSuffix(live, ".md") + "-twin.md"
+	if err := os.WriteFile(liveTwin, mustRead(t, live), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, out, err := srv.handleCloseLoop(context.Background(), nil, CloseLoopInput{
+		EntryPaths: []string{first, second, live, liveTwin, "/nonexistent/loop.md"},
+		Resolution: "duplicate",
+	})
+	if err != nil {
+		t.Fatalf("handleCloseLoop: %v", err)
+	}
+	if len(out.ResolvedPaths) != 4 || len(out.Failed) != 1 {
+		t.Fatalf("want 4 resolved and 1 failed, got %d and %v", len(out.ResolvedPaths), out.Failed)
+	}
+	seen := map[string]bool{}
+	for i, p := range out.ResolvedPaths {
+		if seen[p] {
+			t.Errorf("archive path reused: %s", p)
+		}
+		seen[p] = true
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("archive missing: %v", err)
+		}
+		inPending := strings.Contains(p, "/pending/resolved-loops/")
+		if (i < 2) != inPending {
+			t.Errorf("entry %d archived at %s; pending loops belong in pending/resolved-loops/, live ones in resolved-loops/", i, p)
+		}
+	}
+}
+
+func mustRead(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
 // ─── server instructions ──────────────────────────────────────────────
 
 func TestServerInstructionsContainsAllFourToolNames(t *testing.T) {

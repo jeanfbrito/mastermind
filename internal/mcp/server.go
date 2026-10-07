@@ -126,8 +126,9 @@ mastermind uses a four-layer memory model. Know which layer you're
 operating in to avoid flooding the context window.
 
 - L0 (always loaded, ~500 tokens): open-loop topics injected at
-  session start. Never call mm_search for open loops — they're already
-  in context.
+  session start. Don't call mm_search to read open loops — they're
+  already in context. To close them you need their paths:
+  mm_search(kinds=["open-loop"], include_pending=true).
 - L1 (always loaded, ~2000 tokens): project knowledge injected at
   session start. Scan it before searching.
 - L2 (on-demand, ~200 tokens/result): mm_search DEFAULT. Returns
@@ -175,7 +176,8 @@ Mark an open-loop as resolved. Call this when the user indicates
 they've finished something they previously marked as in-progress
 ("ok, auth refactor is done", "I shipped that fix", "that bug is
 finally closed"). Moves the entry to resolved-loops/ so it stops
-appearing in future session-start injections.
+appearing in future session-start injections. Pass entry_paths to
+close several loops in one call.
 
 ## Critical rules
 

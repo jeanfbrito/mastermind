@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 )
 
 // ─── extractPathKeywords ──────────────────────────────────────────────
@@ -72,130 +73,139 @@ func TestExtractPathKeywords_SingleCharSegmentsSkipped(t *testing.T) {
 	}
 }
 
-// ─── countEntriesInDir ────────────────────────────────────────────────
+// ─── scanTopicDir ─────────────────────────────────────────────────────
 
-func TestCountEntriesInDir_WithEntries(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "entry1.md"), []byte("# test"), 0o644)
-	os.WriteFile(filepath.Join(dir, "entry2.md"), []byte("# test"), 0o644)
-	os.WriteFile(filepath.Join(dir, "not-md.txt"), []byte("skip"), 0o644)
-
-	got := countEntriesInDir(dir)
-	if got != 2 {
-		t.Errorf("countEntriesInDir = %d, want 2", got)
+func writeEntry(t *testing.T, path, topic, project string) {
+	t.Helper()
+	body := "---\ntopic: \"" + topic + "\"\nkind: lesson\n"
+	if project != "" {
+		body += "project: " + project + "\n"
+	}
+	body += "---\n\nBody.\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 
-func TestCountEntriesInDir_CountsSubdirs(t *testing.T) {
+func TestScanTopicDir_CountsMdEntries(t *testing.T) {
+	dir := t.TempDir()
+	writeEntry(t, filepath.Join(dir, "entry1.md"), "One", "")
+	writeEntry(t, filepath.Join(dir, "entry2.md"), "Two", "")
+	os.WriteFile(filepath.Join(dir, "not-md.txt"), []byte("skip"), 0o644)
+
+	if got, _ := scanTopicDir(dir, "test"); got != 2 {
+		t.Errorf("scanTopicDir count = %d, want 2", got)
+	}
+}
+
+func TestScanTopicDir_CountsSubdirs(t *testing.T) {
 	dir := t.TempDir()
 	sub := filepath.Join(dir, "sub")
 	os.MkdirAll(sub, 0o755)
-	os.WriteFile(filepath.Join(dir, "top.md"), []byte("# top"), 0o644)
-	os.WriteFile(filepath.Join(sub, "nested.md"), []byte("# nested"), 0o644)
+	writeEntry(t, filepath.Join(dir, "top.md"), "Top", "")
+	writeEntry(t, filepath.Join(sub, "nested.md"), "Nested", "")
 
-	got := countEntriesInDir(dir)
-	if got != 2 {
-		t.Errorf("countEntriesInDir with subdirs = %d, want 2", got)
+	if got, _ := scanTopicDir(dir, "test"); got != 2 {
+		t.Errorf("scanTopicDir with subdirs = %d, want 2", got)
 	}
 }
 
-func TestCountEntriesInDir_MissingDir(t *testing.T) {
-	got := countEntriesInDir("/nonexistent/dir/that/does/not/exist")
-	if got != 0 {
-		t.Errorf("countEntriesInDir(missing) = %d, want 0", got)
+func TestScanTopicDir_MissingOrEmptyDir(t *testing.T) {
+	for _, dir := range []string{"/nonexistent/dir/that/does/not/exist", t.TempDir()} {
+		if n, topic := scanTopicDir(dir, "test"); n != 0 || topic != "" {
+			t.Errorf("scanTopicDir(%s) = %d %q, want 0 \"\"", dir, n, topic)
+		}
 	}
 }
 
-func TestCountEntriesInDir_EmptyDir(t *testing.T) {
+func TestScanTopicDir_ReturnsTopicFromFrontmatter(t *testing.T) {
 	dir := t.TempDir()
-	got := countEntriesInDir(dir)
-	if got != 0 {
-		t.Errorf("countEntriesInDir(empty) = %d, want 0", got)
+	writeEntry(t, filepath.Join(dir, "dompurify-allowlist.md"), "Always check DOMPurify default allowlist", "test")
+
+	if _, got := scanTopicDir(dir, "test"); got != "Always check DOMPurify default allowlist" {
+		t.Errorf("scanTopicDir topic = %q, want 'Always check DOMPurify default allowlist'", got)
 	}
 }
 
-// ─── bestEntryTopic ───────────────────────────────────────────────────
-
-func TestBestEntryTopic_ReturnsTopicFromFrontmatter(t *testing.T) {
+func TestScanTopicDir_ReturnsMostRecentByModTime(t *testing.T) {
 	dir := t.TempDir()
-	entry := `---
-date: 2026-04-09
-project: test
-topic: "Always check DOMPurify default allowlist"
-kind: lesson
-scope: project-shared
-confidence: high
----
-
-Some body content here.
-`
-	os.WriteFile(filepath.Join(dir, "dompurify-allowlist.md"), []byte(entry), 0o644)
-
-	got := bestEntryTopic(dir)
-	if got != "Always check DOMPurify default allowlist" {
-		t.Errorf("bestEntryTopic = %q, want 'Always check DOMPurify default allowlist'", got)
-	}
-}
-
-func TestBestEntryTopic_ReturnsMostRecentByModTime(t *testing.T) {
-	dir := t.TempDir()
-
-	old := `---
-topic: "Old entry"
-kind: lesson
----
-`
-	new := `---
-topic: "New entry"
-kind: lesson
----
-`
 	oldPath := filepath.Join(dir, "old.md")
 	newPath := filepath.Join(dir, "new.md")
+	writeEntry(t, oldPath, "Old entry", "")
+	writeEntry(t, newPath, "New entry", "")
+	past := time.Now().Add(-time.Hour)
+	os.Chtimes(oldPath, past, past)
 
-	// Write old first, then new — new gets later mod time.
-	os.WriteFile(oldPath, []byte(old), 0o644)
-	// Ensure different mod time by touching the file timestamp.
-	os.WriteFile(newPath, []byte(new), 0o644)
-
-	got := bestEntryTopic(dir)
-	// Should pick "New entry" (most recent mod time).
-	if got != "New entry" {
-		t.Errorf("bestEntryTopic = %q, want 'New entry'", got)
+	if _, got := scanTopicDir(dir, "test"); got != "New entry" {
+		t.Errorf("scanTopicDir topic = %q, want 'New entry'", got)
 	}
 }
 
-func TestBestEntryTopic_MissingDir(t *testing.T) {
-	got := bestEntryTopic("/nonexistent/dir/that/does/not/exist")
-	if got != "" {
-		t.Errorf("bestEntryTopic(missing) = %q, want empty", got)
-	}
-}
-
-func TestBestEntryTopic_EmptyDir(t *testing.T) {
-	dir := t.TempDir()
-	got := bestEntryTopic(dir)
-	if got != "" {
-		t.Errorf("bestEntryTopic(empty) = %q, want empty", got)
-	}
-}
-
-func TestBestEntryTopic_SkipsNonMdFiles(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("not markdown"), 0o644)
-
-	got := bestEntryTopic(dir)
-	if got != "" {
-		t.Errorf("bestEntryTopic(no .md files) = %q, want empty", got)
-	}
-}
-
-func TestBestEntryTopic_BadFrontmatter(t *testing.T) {
+func TestScanTopicDir_SkipsBadFrontmatter(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "broken.md"), []byte("no frontmatter here"), 0o644)
 
-	got := bestEntryTopic(dir)
-	if got != "" {
-		t.Errorf("bestEntryTopic(bad frontmatter) = %q, want empty", got)
+	if n, topic := scanTopicDir(dir, "test"); n != 0 || topic != "" {
+		t.Errorf("scanTopicDir(bad frontmatter) = %d %q, want 0 \"\"", n, topic)
+	}
+}
+
+// ─── project scoping ──────────────────────────────────────────────────
+
+func TestProjectRelativePath(t *testing.T) {
+	root := t.TempDir() // not a git repo: cwd is the root
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name, file, want string
+	}{
+		{"inside", filepath.Join(root, "src", "main.ts"), filepath.Join("src", "main.ts")},
+		{"outside", filepath.Join(filepath.Dir(root), "other", "x.go"), ""},
+		{"relative path", "src/main.ts", ""},
+	}
+	for _, c := range cases {
+		if got := projectRelativePath(root, c.file); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+// The parent directory of a checkout (for example ~/Github) must not
+// become a keyword: it matched the "github" topic on every Read.
+func TestSuggestKeywordsIgnoreDirsAboveProject(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "Github", "Rocket.Chat.Electron")
+	if err := os.MkdirAll(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	kws := extractPathKeywords(projectRelativePath(root, filepath.Join(root, "src", "main.ts")))
+	for _, k := range kws {
+		if k == "github" || k == "rocket.chat.electron" {
+			t.Fatalf("keyword %q comes from above the project root: %v", k, kws)
+		}
+	}
+}
+
+func TestScanTopicDirFiltersByProject(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "search")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, project string) {
+		body := "---\ndate: \"2026-10-07\"\nproject: " + project + "\ntopic: " + name + "\nkind: lesson\nscope: user-personal\nconfidence: high\n---\n\nBody.\n"
+		if err := os.WriteFile(filepath.Join(dir, name+".md"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("general-entry", "general")
+	write("mine", "mastermind")
+	write("other-repo", "rocket-cli")
+
+	if n, _ := scanTopicDir(dir, "mastermind"); n != 2 {
+		t.Errorf("mastermind: got %d entries, want 2 (general + own)", n)
+	}
+	n, topic := scanTopicDir(dir, "rocket.chat.electron")
+	if n != 1 || topic != "general-entry" {
+		t.Errorf("unrelated project: got %d %q, want 1 \"general-entry\"", n, topic)
 	}
 }

@@ -786,3 +786,22 @@ We can always migrate to Redis if pub/sub becomes a requirement.`
 		t.Errorf("body missing post-match context; got: %q", decisionEntry.Body)
 	}
 }
+
+func TestExtract_OpenLoopOnlyFromUserTurns(t *testing.T) {
+	transcript := "User: TODO: we still need to add rate limiting to the public API.\n\n" +
+		"Assistant: Looking good so far.\nI still need to compare recoil angles within tolerance.\n\n"
+	k := &KeywordExtractor{ProjectName: "test"}
+	entries, err := k.Extract(transcript, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var loops []string
+	for _, e := range entries {
+		if e.Metadata.Kind == format.KindOpenLoop {
+			loops = append(loops, e.Metadata.Topic)
+		}
+	}
+	if len(loops) != 1 || !strings.Contains(loops[0], "rate limiting") {
+		t.Errorf("want one open loop from the user turn, got %q", loops)
+	}
+}

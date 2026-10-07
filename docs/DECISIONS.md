@@ -645,6 +645,25 @@ The bias is opposite to the ACT-R "proper mode" open-loop, which is gated on dog
 
 ---
 
+## 2026-10-04 — Open loops scoped to the project, extracted from user turns, archived without overwrite
+
+**Context**: on 2026-10-04 an excitebike session opened with 93 open loops, about 3000 tokens against L0's 500-token budget. 92 were auto-extracted and none was a real loop: they were agent narration ("I still need to compare recoil angles…") and Grok's private reasoning, from five projects, with raw Cursor and ACP transcript JSON as their bodies. Closing 85 of them took 85 `mm_close_loop` calls, and 34 archives were overwritten because same-topic loops mapped to one file name.
+
+**Decisions**:
+
+1. **Session-start shows loops for the active project.** `collectOpenLoops` keeps every loop from the project scopes, and user-personal loops only when tagged with the current project or untagged (`""`, `general`). This is what CONTINUITY.md always specified ("all current open-loops for the active project"); the code had shown every scope's loops everywhere.
+2. **`NormalizeTranscript` reads Cursor (`role` + `message`) and ACP (`method: session/update`) transcripts**, and drops Claude Code `isMeta` lines. Only user and agent message chunks count as prose; ACP's `agent_thought_chunk` is the agent's private reasoning and is dropped. Before this, both formats passed through as raw JSON.
+3. **The keyword extractor takes open loops from user turns only.** In the agent's own turns, open-loop phrases are working narration. Plain-text transcripts carry no role prefixes and keep the old behaviour. The LLM extractor is unchanged; EXTRACTION.md's "lean in on open-loops" still governs it.
+4. **`CloseLoop` never overwrites an archive.** A taken name gets a numeric suffix. A loop closed straight from `pending/` is archived in `pending/resolved-loops/` under its pending file name: it was never reviewed, so it stays out of git with the rest of `pending/` (see "Project `.knowledge/` directories are committed"), and `listDir`'s flat read keeps it out of `ListPending`.
+5. **`mm_close_loop` takes `entry_paths`** to close several loops in one call, reporting failures per entry. This extends the existing tool instead of adding a fifth (hard rule 6). The server instructions now say how to get loop paths (`mm_search` with `kinds=["open-loop"]`, `include_pending=true`), since the L0 list shows topics only.
+6. **L2 excerpts are capped at 1600 characters.** `BodyExcerpt` picks windows by line, and one stored line was over 100K characters; an oversized window shrinks to the cap around the match.
+
+**Alternatives considered**:
+- *Hide pending loops from L0 entirely*: rejected. A real loop extracted at session close would then wait for review before it ever surfaced, which breaks the "I was about to do X" promise.
+- *Switch the default extractor to LLM mode*: needs an API key and costs per session; the keyword tier stays the zero-config default.
+
+---
+
 ## TBD — project-personal sync strategy
 
 **Status**: Open.

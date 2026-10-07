@@ -2,12 +2,19 @@ package search
 
 import (
 	"strings"
+	"unicode/utf8"
 )
 
 // shortBodyThreshold is the character count below which we return the
 // body verbatim rather than trimming it — trimming a short body saves
 // nothing and loses context.
 const shortBodyThreshold = 800
+
+// maxExcerptChars caps every excerpt. Windows are picked by line, and a
+// single line can be huge: an extractor once stored raw transcript JSON
+// as lines of 100K+ characters, and three such results made one
+// mm_search response 250K characters long.
+const maxExcerptChars = 2 * shortBodyThreshold
 
 // BodyExcerpt returns a trimmed view of body for L2 mm_search responses.
 //
@@ -20,6 +27,9 @@ const shortBodyThreshold = 800
 //     the next ## or end of body).
 //  4. If the body has no ## sections, return the first shortBodyThreshold
 //     chars broken at a word boundary.
+//
+// Rules 2 and 3 are clipped to maxExcerptChars; an oversized match
+// window shrinks to that many characters around the match.
 //
 // This is NOT a summarizer — it never paraphrases. It is a window
 // selector: pick the most informative window into the existing text.
@@ -43,13 +53,16 @@ func BodyExcerpt(body, query string) string {
 	if query != "" {
 		tokens := tokenize(query)
 		if idx := findMatchLine(lines, tokens); idx >= 0 {
-			return contextWindow(lines, idx, 3)
+			if window := contextWindow(lines, idx, 3); len(window) <= maxExcerptChars {
+				return window
+			}
+			return clipAround(lines[idx], tokens, maxExcerptChars)
 		}
 	}
 
 	// Rule 3: first ## section.
 	if sec := firstSection(lines); sec != "" {
-		return sec
+		return wordTrim(sec, maxExcerptChars)
 	}
 
 	// Rule 4: fallback — word-boundary trim.
@@ -128,4 +141,43 @@ func wordTrim(body string, n int) string {
 		cut = cut[:idx]
 	}
 	return strings.TrimRight(cut, " \t\n") + "…"
+}
+
+// clipAround returns about n characters of line centred on the first
+// query token it contains, with an ellipsis on each clipped side.
+func clipAround(line string, tokens []string, n int) string {
+	if len(line) <= n {
+		return line
+	}
+	lower := strings.ToLower(line)
+	at := 0
+	for _, tok := range tokens {
+		if i := strings.Index(lower, tok); tok != "" && i >= 0 {
+			at = i
+			break
+		}
+	}
+	start := at - n/2
+	if start < 0 {
+		start = 0
+	}
+	end := start + n
+	if end > len(line) {
+		end = len(line)
+		start = end - n
+	}
+	for start > 0 && !utf8.RuneStart(line[start]) {
+		start--
+	}
+	for end < len(line) && !utf8.RuneStart(line[end]) {
+		end--
+	}
+	clip := line[start:end]
+	if start > 0 {
+		clip = "…" + clip
+	}
+	if end < len(line) {
+		clip += "…"
+	}
+	return clip
 }

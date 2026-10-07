@@ -202,3 +202,24 @@ func TestContextWindowClampedAtEnd(t *testing.T) {
 		t.Errorf("contextWindow clamped end: %q", got)
 	}
 }
+
+func TestBodyExcerpt_HugeLineClippedAroundMatch(t *testing.T) {
+	line := `{"method":"session/update","text":"` + strings.Repeat("x", 50000) +
+		` the motocross plant ` + strings.Repeat("y", 50000) + `"}`
+	body := "## Context\n" + line + "\nnext line"
+	got := BodyExcerpt(body, "motocross")
+	if len(got) > maxExcerptChars+2*len("…") {
+		t.Fatalf("excerpt is %d chars, cap is %d", len(got), maxExcerptChars)
+	}
+	if !strings.Contains(got, "motocross plant") {
+		t.Errorf("excerpt should keep the match: %q", got[:80])
+	}
+}
+
+func TestBodyExcerpt_HugeFirstSectionClipped(t *testing.T) {
+	body := "## Context\n" + strings.Repeat("word ", 20000)
+	got := BodyExcerpt(body, "")
+	if len(got) > maxExcerptChars+len("…") {
+		t.Fatalf("excerpt is %d chars, cap is %d", len(got), maxExcerptChars)
+	}
+}

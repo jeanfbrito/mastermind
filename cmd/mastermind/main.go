@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
@@ -354,8 +355,8 @@ func runSessionStart() error {
 	s := store.New(cfg)
 	projectName := project.DetectFromGit(cwd)
 
-	// Collect open loops from all scopes (live + pending).
-	openLoops, err := collectOpenLoops(s)
+	// Collect open loops for this project (live + pending).
+	openLoops, err := collectOpenLoops(s, projectName)
 	if err != nil {
 		return fmt.Errorf("collect open loops: %w", err)
 	}
@@ -461,11 +462,18 @@ func entrySummariesFromRefs(refs []store.EntryRef) []entrySummary {
 	return out
 }
 
-// collectOpenLoops gathers all open-loop entries from live and pending
-// across all three scopes. Open loops are the most critical thing to
-// surface — they represent in-progress work that would otherwise be
-// forgotten.
-func collectOpenLoops(s *store.Store) ([]store.EntryRef, error) {
+// collectOpenLoops gathers the open-loop entries for the active
+// project from live and pending, per CONTINUITY.md ("all current
+// open-loops for the active project"). Open loops are the most critical
+// thing to surface — they represent in-progress work that would
+// otherwise be forgotten.
+//
+// Project-shared and project-personal loops belong to this project by
+// definition. User-personal loops are shared across every project, so
+// only those tagged with this project, or with no project, are shown.
+// Without that filter every loop extracted anywhere lands in every
+// session: by 2026-10-04 that was 93 loops and 3000 tokens of L0.
+func collectOpenLoops(s *store.Store, projectName string) ([]store.EntryRef, error) {
 	var loops []store.EntryRef
 
 	for _, scope := range format.AllScopes() {
@@ -473,26 +481,34 @@ func collectOpenLoops(s *store.Store) ([]store.EntryRef, error) {
 		if err != nil {
 			return nil, err
 		}
-		for _, ref := range live {
-			if ref.Metadata.Kind == format.KindOpenLoop {
-				loops = append(loops, ref)
-			}
-		}
-
 		pending, err := s.ListPending(scope)
 		if err != nil {
 			return nil, err
 		}
-		for _, ref := range pending {
-			if ref.Metadata.Kind == format.KindOpenLoop {
-				loops = append(loops, ref)
+		for _, ref := range append(live, pending...) {
+			if ref.Metadata.Kind != format.KindOpenLoop {
+				continue
 			}
+			if scope == format.ScopeUserPersonal && !loopBelongsTo(ref.Metadata.Project, projectName) {
+				continue
+			}
+			loops = append(loops, ref)
 		}
 	}
 
 	// Sort by date descending (newest first).
 	sortByDateDesc(loops)
 	return loops, nil
+}
+
+// loopBelongsTo reports whether a user-personal loop tagged with
+// project should surface in a session for current. Untagged loops
+// ("" or the extractor's "general") are cross-project and always show.
+func loopBelongsTo(project, current string) bool {
+	if project == "" || strings.EqualFold(project, "general") {
+		return true
+	}
+	return current != "" && strings.EqualFold(project, current)
 }
 
 // collectProjectEntries gathers non-open-loop entries relevant to the
@@ -918,6 +934,11 @@ func runExtract() error {
 	// Write each entry to pending/.
 	var written, failed int
 	for i := range entries {
+		if extract.ContainsRawTranscript(entries[i].Body) {
+			fmt.Fprintf(os.Stderr, "mastermind extract: rejected raw transcript dump %q\n", entries[i].Metadata.Topic)
+			failed++
+			continue
+		}
 		// Assign scope: project-shared if project store is configured,
 		// otherwise user-personal.
 		if cfg.ProjectSharedRoot != "" {
@@ -1152,8 +1173,16 @@ func runSuggest() error {
 		return nil // no file path — nothing to suggest
 	}
 
-	// Extract keywords from the file path.
-	keywords := extractPathKeywords(toolInput.FilePath)
+	cwd := input.Cwd
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
+
+	// Extract keywords from the path inside the project. Segments above
+	// the project root (~/Github, the user's home) say nothing about the
+	// file: matching them nudged every Read under ~/Github with the
+	// "github" topic. Files outside the project get no nudge.
+	keywords := extractPathKeywords(projectRelativePath(cwd, toolInput.FilePath))
 	if len(keywords) == 0 {
 		if jsonOut {
 			return printJSON(suggestJSON{Matched: false, FilePath: toolInput.FilePath})
@@ -1162,10 +1191,6 @@ func runSuggest() error {
 	}
 
 	// Build store config to find scope roots.
-	cwd := input.Cwd
-	if cwd == "" {
-		cwd, _ = os.Getwd()
-	}
 	cfg, err := buildSessionConfig(cwd)
 	if err != nil {
 		if jsonOut {
@@ -1184,6 +1209,7 @@ func runSuggest() error {
 	}
 	var matches []topicMatch
 	seen := make(map[string]bool)
+	projectName := project.DetectFromGit(cwd)
 
 	for _, kw := range keywords {
 		if seen[kw] {
@@ -1197,10 +1223,10 @@ func runSuggest() error {
 			if root == "" {
 				continue
 			}
-			dir := filepath.Join(root, kw)
-			total += countEntriesInDir(dir)
+			count, topic := scanTopicDir(filepath.Join(root, kw), projectName)
+			total += count
 			if bestTopic == "" {
-				bestTopic = bestEntryTopic(dir)
+				bestTopic = topic
 			}
 		}
 		if total > 0 {
@@ -1246,17 +1272,54 @@ func runSuggest() error {
 			Count:    best.count,
 		})
 	}
+	var nudge string
 	if best.topTopic != "" {
 		extra := best.count - 1
 		if extra > 0 {
-			fmt.Printf("_mastermind: \"%s\" + %d more in %q — consider mm_search._\n", best.topTopic, extra, best.dir)
+			nudge = fmt.Sprintf("mastermind: \"%s\" + %d more in %q — consider mm_search.", best.topTopic, extra, best.dir)
 		} else {
-			fmt.Printf("_mastermind: \"%s\" — consider mm_search._\n", best.topTopic)
+			nudge = fmt.Sprintf("mastermind: \"%s\" — consider mm_search.", best.topTopic)
 		}
 	} else {
-		fmt.Printf("_mastermind has knowledge about %q (%d entries) — consider mm_search._\n", best.dir, best.count)
+		nudge = fmt.Sprintf("mastermind has knowledge about %q (%d entries) — consider mm_search.", best.dir, best.count)
 	}
-	return nil
+	// Claude Code shows plain PostToolUse stdout only in the transcript
+	// view; the model receives hookSpecificOutput.additionalContext.
+	return printJSON(postToolUseOutput{HookSpecificOutput: postToolUseContext{
+		HookEventName:     "PostToolUse",
+		AdditionalContext: nudge,
+	}})
+}
+
+// postToolUseOutput is the PostToolUse hook response that delivers
+// additionalContext to the model.
+type postToolUseOutput struct {
+	HookSpecificOutput postToolUseContext `json:"hookSpecificOutput"`
+}
+
+type postToolUseContext struct {
+	HookEventName     string `json:"hookEventName"`
+	AdditionalContext string `json:"additionalContext"`
+}
+
+// projectRelativePath returns filePath relative to the git root of cwd
+// (or cwd itself outside a repo). It returns "" when filePath is not
+// inside that root.
+func projectRelativePath(cwd, filePath string) string {
+	root := cwd
+	if out, err := exec.Command("git", "-C", cwd, "rev-parse", "--show-toplevel").Output(); err == nil {
+		if r := strings.TrimSpace(string(out)); r != "" {
+			root = r
+		}
+	}
+	if root == "" || !filepath.IsAbs(filePath) {
+		return ""
+	}
+	rel, err := filepath.Rel(root, filePath)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	return rel
 }
 
 // extractPathKeywords pulls meaningful keywords from a file path.
@@ -1283,63 +1346,50 @@ func extractPathKeywords(filePath string) []string {
 	return keywords
 }
 
-// countEntriesInDir counts .md files in a directory and its subdirs.
-// Returns 0 if the directory doesn't exist.
-func countEntriesInDir(dir string) int {
+// scanTopicDir counts the entries in dir (and its subdirs) that apply
+// to projectName, and returns the topic of the most recently modified
+// one. An entry applies when its project is empty, "general", or equal
+// to projectName (case-insensitive): an entry tagged for another repo
+// must not nudge here just because a directory name matches. Entries
+// that do not parse are skipped. Topic dirs hold a handful of small
+// files, so parsing each one keeps the hook well under its budget.
+func scanTopicDir(dir, projectName string) (int, string) {
 	info, err := os.Stat(dir)
 	if err != nil || !info.IsDir() {
-		return 0
+		return 0, ""
 	}
 	count := 0
-	filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if !d.IsDir() && strings.HasSuffix(d.Name(), ".md") {
-			count++
-		}
-		return nil
-	})
-	return count
-}
-
-// bestEntryTopic reads the most recently modified .md file in dir and
-// returns its topic from frontmatter. Returns "" if the dir doesn't
-// exist, has no entries, or parsing fails. Designed to add <1ms to the
-// suggest path — reads one small file.
-func bestEntryTopic(dir string) string {
-	info, err := os.Stat(dir)
-	if err != nil || !info.IsDir() {
-		return ""
-	}
-
-	var bestPath string
+	var bestTopic string
 	var bestTime time.Time
 	filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
 		if err != nil || d.IsDir() || !strings.HasSuffix(d.Name(), ".md") {
 			return nil
 		}
-		if fi, err := d.Info(); err == nil {
-			if bestPath == "" || fi.ModTime().After(bestTime) {
-				bestPath = path
-				bestTime = fi.ModTime()
-			}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		entry, err := format.Parse(data)
+		if err != nil || !entryAppliesTo(entry.Metadata.Project, projectName) {
+			return nil
+		}
+		count++
+		if fi, err := d.Info(); err == nil && (bestTopic == "" || fi.ModTime().After(bestTime)) {
+			bestTopic = entry.Metadata.Topic
+			bestTime = fi.ModTime()
 		}
 		return nil
 	})
+	return count, bestTopic
+}
 
-	if bestPath == "" {
-		return ""
+// entryAppliesTo reports whether an entry tagged entryProject is
+// relevant in projectName.
+func entryAppliesTo(entryProject, projectName string) bool {
+	if entryProject == "" || strings.EqualFold(entryProject, "general") {
+		return true
 	}
-	data, err := os.ReadFile(bestPath)
-	if err != nil {
-		return ""
-	}
-	entry, err := format.Parse(data)
-	if err != nil {
-		return ""
-	}
-	return entry.Metadata.Topic
+	return strings.EqualFold(entryProject, projectName)
 }
 
 // sortByDateDesc sorts entry refs by date descending (newest first).

@@ -5,20 +5,31 @@ import (
 	"strings"
 )
 
-// NormalizeTranscript detects Claude Code JSONL transcripts and returns
-// a plaintext concatenation of user/assistant prose only. Tool calls,
-// tool results, attachments, and system lines are stripped. If the
-// input does not look like JSONL (first non-empty line is not a JSON
-// object with a "type" field), the input is returned unchanged —
-// plain-text inputs pass through untouched so this is safe to call
-// unconditionally on every transcript path.
+// NormalizeTranscript detects agent JSONL transcripts and returns a
+// plaintext concatenation of user/assistant prose only. Tool calls,
+// tool results, attachments, reasoning, and system lines are stripped.
+// If the input does not look like a known JSONL transcript, the input
+// is returned unchanged — plain-text inputs pass through untouched so
+// this is safe to call unconditionally on every transcript path.
+//
+// Three line shapes are recognised:
+//
+//   - Claude Code: {"type":"user"|"assistant","message":{...}}. Lines
+//     with "isMeta":true (injected skill bodies, caveats) are dropped.
+//   - Cursor agent: {"role":"user"|"assistant","message":{...}}.
+//   - ACP (Grok Build and other Agent Client Protocol hosts):
+//     {"method":"session/update","params":{"update":{...}}}. Only
+//     user_message_chunk and agent_message_chunk carry prose;
+//     agent_thought_chunk is the agent's private reasoning and is
+//     dropped with tool calls and hook events. Consecutive chunks of
+//     the same role are joined into one turn.
 //
 // Rationale: the keyword extractor scans text for signal phrases. When
-// fed raw Claude Code JSONL, it matches phrases inside tool_use_id
-// strings, tool_result content, and other structural JSON. The Phase 3
-// polish audit showed 10/10 false-positive extractions came from this.
-// Normalizing to prose before extraction eliminates that class of noise
-// and gives the regex tier a clean signal to scan.
+// fed raw JSONL, it matches phrases inside tool_use_id strings,
+// tool_result content, and other structural JSON. The Phase 3 polish
+// audit showed 10/10 false-positive extractions came from this, and
+// the 2026-10-04 cleanup found 92 open loops whose bodies were raw
+// Cursor and ACP JSON that this function used to pass through.
 //
 // The output format is "<Role>: <text>\n\n" per turn, with Role in
 // {"User", "Assistant"}. The role prefix prevents adjacent turns from
@@ -29,7 +40,7 @@ func NormalizeTranscript(raw string) string {
 		return raw
 	}
 
-	var out strings.Builder
+	var turns []turn
 	for _, line := range strings.Split(raw, "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
@@ -38,26 +49,41 @@ func NormalizeTranscript(raw string) string {
 		if err := json.Unmarshal([]byte(line), &env); err != nil {
 			continue // skip malformed lines silently
 		}
-		if env.Type != "user" && env.Type != "assistant" {
+		role, text, chunk := env.prose()
+		if role == "" || strings.TrimSpace(text) == "" {
 			continue
 		}
-		text := extractMessageText(env.Message)
-		if strings.TrimSpace(text) == "" {
-			continue
+		if chunk && len(turns) > 0 {
+			last := &turns[len(turns)-1]
+			if last.chunk && last.role == role {
+				last.text += text
+				continue
+			}
 		}
-		if env.Type == "user" {
-			out.WriteString("User: ")
-		} else {
-			out.WriteString("Assistant: ")
-		}
-		out.WriteString(text)
+		turns = append(turns, turn{role: role, text: text, chunk: chunk})
+	}
+
+	var out strings.Builder
+	for _, t := range turns {
+		out.WriteString(t.role)
+		out.WriteString(": ")
+		out.WriteString(t.text)
 		out.WriteString("\n\n")
 	}
 	return out.String()
 }
 
+// turn is one speaker's prose in the normalized output. chunk marks a
+// turn built from streamed ACP chunks, which later chunks may extend.
+type turn struct {
+	role  string
+	text  string
+	chunk bool
+}
+
 // looksLikeJSONL reports whether the first non-empty line decodes as a
-// JSON object with a "type" field. Cheap — decodes one line, no more.
+// JSON object in one of the recognised transcript shapes. Cheap —
+// decodes one line, no more.
 func looksLikeJSONL(raw string) bool {
 	for _, line := range strings.SplitN(raw, "\n", 32) {
 		line = strings.TrimSpace(line)
@@ -68,16 +94,92 @@ func looksLikeJSONL(raw string) bool {
 		if err := json.Unmarshal([]byte(line), &probe); err != nil {
 			return false
 		}
-		return probe.Type != ""
+		return probe.Type != "" || probe.Role != "" || probe.Method != ""
 	}
 	return false
 }
 
-// jsonlEnvelope is the minimal shape of a Claude Code .jsonl line we
-// care about: the record type and the inline message payload.
+// ContainsRawTranscript reports whether any line of body decodes as a
+// transcript JSONL envelope. An entry body that carries one is a raw
+// transcript dump, not distilled knowledge: before NormalizeTranscript
+// read Cursor transcripts, the keyword extractor copied their JSONL
+// lines verbatim into pending/. Callers reject such entries.
+func ContainsRawTranscript(body string) bool {
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var probe jsonlEnvelope
+		if err := json.Unmarshal([]byte(line), &probe); err != nil {
+			continue
+		}
+		if probe.Type != "" || probe.Role != "" || probe.Method != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// jsonlEnvelope is the union of the transcript line shapes we read:
+// Claude Code (type + message), Cursor (role + message) and ACP
+// (method + params).
 type jsonlEnvelope struct {
 	Type    string          `json:"type"`
+	Role    string          `json:"role"`
+	IsMeta  bool            `json:"isMeta"`
 	Message json.RawMessage `json:"message"`
+	Method  string          `json:"method"`
+	Params  struct {
+		Update struct {
+			SessionUpdate string `json:"sessionUpdate"`
+			Content       struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"update"`
+	} `json:"params"`
+}
+
+// prose returns the speaker ("User" or "Assistant") and text of one
+// transcript line, or an empty role when the line carries no prose.
+// chunk reports a streamed ACP chunk.
+func (e jsonlEnvelope) prose() (role, text string, chunk bool) {
+	switch {
+	case e.Method != "":
+		if !strings.HasSuffix(e.Method, "session/update") {
+			return "", "", false
+		}
+		u := e.Params.Update
+		if u.Content.Type != "text" {
+			return "", "", false
+		}
+		switch u.SessionUpdate {
+		case "user_message_chunk":
+			return "User", u.Content.Text, true
+		case "agent_message_chunk":
+			return "Assistant", u.Content.Text, true
+		}
+		return "", "", false
+	case e.Type != "":
+		if e.IsMeta {
+			return "", "", false
+		}
+		return speaker(e.Type), extractMessageText(e.Message), false
+	default:
+		return speaker(e.Role), extractMessageText(e.Message), false
+	}
+}
+
+// speaker maps a transcript role to its output label.
+func speaker(role string) string {
+	switch role {
+	case "user":
+		return "User"
+	case "assistant":
+		return "Assistant"
+	}
+	return ""
 }
 
 // extractMessageText pulls prose out of the .message field. Claude
