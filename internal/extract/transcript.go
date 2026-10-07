@@ -99,6 +99,28 @@ func looksLikeJSONL(raw string) bool {
 	return false
 }
 
+// ContainsRawTranscript reports whether any line of body decodes as a
+// transcript JSONL envelope. An entry body that carries one is a raw
+// transcript dump, not distilled knowledge: before NormalizeTranscript
+// read Cursor transcripts, the keyword extractor copied their JSONL
+// lines verbatim into pending/. Callers reject such entries.
+func ContainsRawTranscript(body string) bool {
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var probe jsonlEnvelope
+		if err := json.Unmarshal([]byte(line), &probe); err != nil {
+			continue
+		}
+		if probe.Type != "" || probe.Role != "" || probe.Method != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // jsonlEnvelope is the union of the transcript line shapes we read:
 // Claude Code (type + message), Cursor (role + message) and ACP
 // (method + params).
